@@ -1,49 +1,5 @@
 #!/bin/bash
 
-# 主菜单函数
-function main_menu() {
-    while true; do
-        clear
-        echo "脚本由大赌社区哈哈哈哈编写，推特 @ferdie_jhovie，免费开源，请勿相信收费"
-        echo "如有问题，可联系推特，仅此只有一个号"
-        echo "================================================================"
-        echo "退出脚本，请按键盘 ctrl + C 退出即可"
-        echo "请选择要执行的操作:"
-        echo "1. 部署多个hyperspace节点"
-        echo "2. 查看日志"
-        echo "3. 查看积分"
-        echo "4. 删除节点（停止节点）"
-        echo "5. 启用日志监控"
-        echo "6. 查看使用的私钥"
-        echo "7. 退出脚本"
-        echo "================================================================"
-        read -p "请输入选择 (1/2/3/4/5/6/7): " choice
-
-        case $choice in
-            1)  deploy_multiple_nodes ;;
-            2)  view_logs ;; 
-            3)  view_points ;;
-            4)  delete_node ;;
-            5)  start_log_monitor ;;
-            6)  view_private_key ;;
-            7)  exit_script ;;
-            *)  echo "无效选择，请重新输入！"; sleep 2 ;;
-        esac
-    done
-}
-
-# 部署多个hyperspace节点
-function deploy_multiple_nodes() {
-    read -p "请输入要部署的节点数量: " num_nodes
-    for i in $(seq 1 $num_nodes); do
-        echo "部署节点 $i..."
-        deploy_single_node $i
-    done
-    echo "所有节点部署完成！"
-    read -n 1 -s -r -p "按任意键返回主菜单..."
-    main_menu
-}
-
 # 部署单个hyperspace节点
 function deploy_single_node() {
     node_id=$1
@@ -112,6 +68,15 @@ function deploy_single_node() {
         aios-cli hive import-keys "./private_key_$node_id.pem"
     fi
 
+    # 确保守护进程已成功启动
+    echo "确保守护进程已成功启动"
+    screen -S "$screen_name" -X stuff "aios-cli start\n"
+    sleep 5
+
+    # 详细日志输出
+    echo "设置 RUST_BACKTRACE 以便获取更多详细错误信息..."
+    export RUST_BACKTRACE=1
+
     # 添加模型
     echo "正在通过命令 'aios-cli models add' 添加模型..."
     while true; do
@@ -164,4 +129,49 @@ function exit_script() {
 }
 
 # 启动主菜单
+function main_menu() {
+    while true; do
+        echo "请选择要执行的操作:"
+        echo "1. 部署多个hyperspace节点"
+        echo "2. 查看日志"
+        echo "3. 查看积分"
+        echo "4. 删除节点（停止节点）"
+        echo "5. 启用日志监控"
+        echo "6. 查看使用的私钥"
+        echo "7. 退出脚本"
+        echo "================================================================"
+        read -p "请输入选择 (1/2/3/4/5/6/7): " choice
+        case $choice in
+            1)
+                read -p "请输入要部署的节点数量: " num_nodes
+                for i in $(seq 1 $num_nodes); do
+                    deploy_single_node $i
+                done
+                ;;
+            2)
+                echo "查看日志功能待实现"
+                ;;
+            3)
+                echo "查看积分功能待实现"
+                ;;
+            4)
+                echo "删除节点功能待实现"
+                ;;
+            5)
+                echo "启用日志监控功能待实现"
+                ;;
+            6)
+                echo "查看使用的私钥功能待实现"
+                ;;
+            7)
+                exit_script
+                ;;
+            *)
+                echo "无效选择，请重新输入。"
+                ;;
+        esac
+    done
+}
+
+# 启动脚本
 main_menu

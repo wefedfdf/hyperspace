@@ -60,44 +60,56 @@ function deploy_hyperspace_node() {
     echo "正在执行安装命令：curl https://download.hyper.space/api/install | bash"
     curl https://download.hyper.space/api/install | bash
 
-    # 获取安装后新添加的路径并更新环境
+    # 更新环境变量
     source /root/.bashrc
+    export PATH="$PATH:/root/.local/bin"
     
     # 验证aios-cli是否可用
     if ! command -v aios-cli &> /dev/null; then
-        echo "aios-cli 命令未找到，正在重试..."
-        sleep 3
-        export PATH="$PATH:/root/.local/bin"
-        if ! command -v aios-cli &> /dev/null; then
-            echo "无法找到 aios-cli 命令，请手动运行 'source /root/.bashrc' 后重试"
-            read -n 1 -s -r -p "按任意键返回主菜单..."
-            return
-        fi
+        echo "aios-cli 命令未找到，请确保安装成功"
+        read -n 1 -s -r -p "按任意键返回主菜单..."
+        return
     fi
 
-    # 确保守护进程已停止
-    echo "停止可能运行的守护进程..."
+    # 清理旧的配置和进程
+    echo "清理旧的配置和进程..."
     aios-cli kill 2>/dev/null
+    sleep 2
+    rm -rf ~/.local/share/aios-cli/* 2>/dev/null
+    sleep 2
+
+    # 初始化 aios-cli
+    echo "初始化 aios-cli..."
+    export RUST_BACKTRACE=1
+    if ! aios-cli init; then
+        echo "初始化失败，请检查系统环境"
+        read -n 1 -s -r -p "按任意键返回主菜单..."
+        return
+    fi
     sleep 5
 
     # 启动守护进程
     echo "启动守护进程..."
     aios-cli start
-    sleep 10  # 给守护进程足够的启动时间
+    sleep 15  # 增加等待时间
 
     # 验证守护进程状态
-    if ! aios-cli status &>/dev/null; then
-        echo "守护进程启动失败，尝试重新启动..."
-        aios-cli kill
-        sleep 5
-        aios-cli start
-        sleep 10
-        if ! aios-cli status &>/dev/null; then
-            echo "无法启动守护进程，请检查系统环境"
+    echo "验证守护进程状态..."
+    for i in {1..3}; do
+        if aios-cli status &>/dev/null; then
+            break
+        fi
+        if [ $i -eq 3 ]; then
+            echo "守护进程启动失败"
             read -n 1 -s -r -p "按任意键返回主菜单..."
             return
         fi
-    fi
+        echo "重试启动守护进程... ($i/3)"
+        aios-cli kill
+        sleep 5
+        aios-cli start
+        sleep 15
+    done
 
     # 私钥导入逻辑
     echo "请输入私钥（按 CTRL+D 结束）："
@@ -106,44 +118,43 @@ function deploy_hyperspace_node() {
     
     if [ -s "$tmpfile" ]; then
         echo "正在导入私钥..."
-        # 确保私钥文件格式正确（移除可能的空行和空格）
+        # 清理私钥格式
         sed -i 's/[[:space:]]*$//' "$tmpfile"
-        if aios-cli hive import-keys "$tmpfile" 2>/dev/null; then
-            echo "私钥导入成功！"
-        else
-            echo "私钥导入失败，尝试替代方法..."
-            # 尝试直接使用私钥内容
+        sed -i '/^$/d' "$tmpfile"
+        
+        # 尝试多种方式导入私钥
+        if ! aios-cli hive import-keys "$tmpfile" 2>/dev/null; then
             key_content=$(cat "$tmpfile")
-            if echo "$key_content" | aios-cli hive import-keys -; then
-                echo "私钥导入成功！"
-            else
-                echo "私钥导入失败，请检查格式是否正确"
+            if ! echo "$key_content" | aios-cli hive import-keys - 2>/dev/null; then
+                echo "私钥导入失败，请确保格式正确"
                 rm "$tmpfile"
                 read -n 1 -s -r -p "按任意键返回主菜单..."
                 return
             fi
         fi
+        echo "私钥导入成功！"
     else
-        echo "未输入私钥，操作取消"
+        echo "未输入私钥"
         rm "$tmpfile"
         read -n 1 -s -r -p "按任意键返回主菜单..."
         return
     fi
     rm "$tmpfile"
 
-    # 定义模型变量并添加模型
-    model="hf:TheBloke/phi-2-GGUF:phi-2.Q4_K_M.gguf"
+    # 添加模型
     echo "正在添加模型..."
-    
+    model="hf:TheBloke/phi-2-GGUF:phi-2.Q4_K_M.gguf"
     retry_count=0
-    max_retries=5
+    max_retries=3
     
     while [ $retry_count -lt $max_retries ]; do
-        # 确保守护进程运行
+        # 验证守护进程状态
         if ! aios-cli status &>/dev/null; then
             echo "守护进程未运行，重新启动..."
+            aios-cli kill
+            sleep 5
             aios-cli start
-            sleep 10
+            sleep 15
         fi
         
         if aios-cli models add "$model" 2>/dev/null; then
@@ -152,11 +163,12 @@ function deploy_hyperspace_node() {
         else
             ((retry_count++))
             if [ $retry_count -lt $max_retries ]; then
-                echo "添加模型失败，等待10秒后重试... (尝试 $retry_count/$max_retries)"
+                echo "添加模型失败，等待15秒后重试... (尝试 $retry_count/$max_retries)"
                 aios-cli kill
                 sleep 5
+                rm -rf ~/.local/share/aios-cli/models/* 2>/dev/null
                 aios-cli start
-                sleep 10
+                sleep 15
             else
                 echo "添加模型失败，请检查网络连接"
                 read -n 1 -s -r -p "按任意键返回主菜单..."
@@ -165,10 +177,10 @@ function deploy_hyperspace_node() {
         fi
     done
 
-    # 登录并选择等级
+    # 登录和连接
     echo "正在登录..."
     if ! aios-cli hive login; then
-        echo "登录失败，请检查网络连接和私钥"
+        echo "登录失败"
         read -n 1 -s -r -p "按任意键返回主菜单..."
         return
     fi
@@ -177,12 +189,11 @@ function deploy_hyperspace_node() {
     select tier in 1 2 3 4 5; do
         case $tier in
             1|2|3|4|5)
-                echo "选择等级 $tier"
                 if aios-cli hive select-tier $tier; then
+                    echo "成功设置等级 $tier"
                     break
                 else
                     echo "设置等级失败，请重试"
-                    continue
                 fi
                 ;;
             *)
@@ -191,23 +202,17 @@ function deploy_hyperspace_node() {
         esac
     done
 
-    # 连接到 Hive
-    echo "连接到 Hive..."
-    if ! aios-cli hive connect; then
-        echo "连接失败，请检查网络状态"
-        read -n 1 -s -r -p "按任意键返回主菜单..."
-        return
-    fi
-    sleep 5
-
     # 启动服务
     echo "启动服务..."
     aios-cli kill 2>/dev/null
-    sleep 2
-    aios-cli start --connect
+    sleep 5
+    if ! aios-cli start --connect; then
+        echo "服务启动失败"
+        read -n 1 -s -r -p "按任意键返回主菜单..."
+        return
+    fi
 
     echo "节点部署完成！服务已在后台运行"
-    
     read -n 1 -s -r -p "按任意键返回主菜单..."
 }
 

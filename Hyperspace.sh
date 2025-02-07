@@ -1,15 +1,50 @@
 #!/bin/bash
 
-# 部署单个hyperspace节点
-function deploy_single_node() {
-    node_id=$1
+# 脚本保存路径
+SCRIPT_PATH="$HOME/Hyperspace.sh"
 
+# 主菜单函数
+function main_menu() {
+    while true; do
+        clear
+        echo "脚本由大赌社区哈哈哈哈编写，推特 @ferdie_jhovie，免费开源，请勿相信收费"
+        echo "如有问题，可联系推特，仅此只有一个号"
+        echo "================================================================"
+        echo "退出脚本，请按键盘 ctrl + C 退出即可"
+        echo "请选择要执行的操作:"
+        echo "1. 部署hyperspace节点"
+        echo "2. 查看日志"
+        echo "3. 查看积分"
+        echo "4. 删除节点（停止节点）"
+        echo "5. 启用日志监控"
+        echo "6. 查看使用的私钥"
+        echo "7. 退出脚本"
+        echo "================================================================"
+        read -p "请输入选择 (1/2/3/4/5/6/7): " choice
+
+        case $choice in
+            1)  deploy_hyperspace_node ;;
+            2)  view_logs ;; 
+            3)  view_points ;;
+            4)  delete_node ;;
+            5)  start_log_monitor ;;
+            6)  view_private_key ;;
+            7)  exit_script ;;
+            *)  echo "无效选择，请重新输入！"; sleep 2 ;;
+        esac
+    done
+}
+
+# 部署hyperspace节点
+function deploy_hyperspace_node() {
     # 执行安装命令
     echo "正在执行安装命令：curl https://download.hyper.space/api/install | bash"
     curl https://download.hyper.space/api/install | bash
 
     # 获取安装后新添加的路径
     NEW_PATH=$(bash -c 'source /root/.bashrc && echo $PATH')
+    
+    # 更新当前shell的PATH
     export PATH="$NEW_PATH"
 
     # 验证aios-cli是否可用
@@ -20,16 +55,18 @@ function deploy_single_node() {
         export PATH="$PATH:/root/.local/bin"
         if ! command -v aios-cli &> /dev/null; then
             echo "无法找到 aios-cli 命令，请手动运行 'source /root/.bashrc' 后重试"
+            read -n 1 -s -r -p "按任意键返回主菜单..."
             return
         fi
     fi
 
-    # 提示输入屏幕名称，默认值为 'node_<id>'
-    screen_name="node_$node_id"
+    # 提示输入屏幕名称，默认值为 'hyper'
+    read -p "请输入屏幕名称 (默认值: hyper): " screen_name
+    screen_name=${screen_name:-hyper}
     echo "使用的屏幕名称是: $screen_name"
 
-    # 清理已存在的屏幕会话
-    echo "检查并清理现有的 '$screen_name' 屏幕会话..."
+    # 清理已存在的 'hyper' 屏幕会话
+    echo "检查并清理现有的 'hyper' 屏幕会话..."
     screen -ls | grep "$screen_name" &>/dev/null
     if [ $? -eq 0 ]; then
         echo "找到现有的 '$screen_name' 屏幕会话，正在停止并删除..."
@@ -43,56 +80,63 @@ function deploy_single_node() {
     echo "创建一个名为 '$screen_name' 的屏幕会话..."
     screen -S "$screen_name" -dm
 
-    # 在屏幕会话中启动 aiOs 守护进程
-    echo "启动 aiOs 守护进程..."
+    # 在屏幕会话中运行 aios-cli start
+    echo "在屏幕会话 '$screen_name' 中运行 'aios-cli start' 命令..."
     screen -S "$screen_name" -X stuff "aios-cli start\n"
 
-    # 等待几秒钟确保守护进程已启动
+    # 等待几秒钟确保命令执行
     sleep 5
 
-    # 提示用户输入私钥
-    echo "请输入节点 $node_id 的私钥（按 CTRL+D 结束）："
-    read private_key
-    echo "$private_key" > "private_key_$node_id.pem"
+    # 退出屏幕会话
+    echo "退出屏幕会话 '$screen_name'..."
+    screen -S "$screen_name" -X detach
+    sleep 5
+    
+    # 确保环境变量已经生效
+    echo "确保环境变量更新..."
+    source /root/.bashrc
+    sleep 4  # 等待4秒确保环境变量加载
 
-    # 导入私钥
-    echo "正在使用 private_key_$node_id.pem 文件运行 import-keys 命令..."
-    aios-cli hive import-keys "./private_key_$node_id.pem"
+    # 打印当前 PATH，确保 aios-cli 在其中
+    echo "当前 PATH: $PATH"
+
+    # 提示用户输入私钥并保存为 my.pem 文件
+    echo "请输入你的私钥（按 CTRL+D 结束）："
+    cat > my.pem
+
+    # 使用 my.pem 文件运行 import-keys 命令
+    echo "正在使用 my.pem 文件运行 import-keys 命令..."
+    
+    # 运行 import-keys 命令
+    aios-cli hive import-keys ./my.pem
     sleep 5
 
-    # 如果导入失败，尝试启动守护进程
-    if [[ $? -ne 0 ]]; then
-        echo "导入私钥失败，尝试启动守护进程并重试..."
-        screen -S "$screen_name" -X stuff "aios-cli start\n"
-        sleep 10
-        aios-cli hive import-keys "./private_key_$node_id.pem"
-    fi
+    # 定义模型变量
+    model="hf:TheBloke/phi-2-GGUF:phi-2.Q4_K_M.gguf"
 
-    # 确保守护进程已成功启动
-    echo "确保守护进程已成功启动"
-    screen -S "$screen_name" -X stuff "aios-cli start\n"
-    sleep 5
-
-    # 详细日志输出
-    echo "设置 RUST_BACKTRACE 以便获取更多详细错误信息..."
+    # 打开详细错误调试信息
     export RUST_BACKTRACE=1
 
-    # 添加模型
+    # 添加模型并重试
     echo "正在通过命令 'aios-cli models add' 添加模型..."
     while true; do
-        if aios-cli models add "hf:TheBloke/phi-2-GGUF:phi-2.Q4_K_M.gguf"; then
-            echo "模型添加成功！"
+        if aios-cli models add "$model"; then
+            echo "模型添加成功并且下载完成！"
             break
         else
             echo "添加模型时发生错误，正在重试..."
+            tail -n 50 /root/aios-cli.log  # 打印最近50行日志，便于调试
             sleep 3
         fi
     done
 
     # 登录并选择等级
     echo "正在登录并选择等级..."
+
+    # 登录到 Hive
     aios-cli hive login
 
+    # 提示用户选择等级
     echo "请选择等级（1-5）："
     select tier in 1 2 3 4 5; do
         case $tier in
@@ -119,59 +163,14 @@ function deploy_single_node() {
     echo "在屏幕会话 '$screen_name' 中运行 'aios-cli start --connect'，并将输出定向到 '/root/aios-cli.log'..."
     screen -S "$screen_name" -X stuff "aios-cli start --connect >> /root/aios-cli.log 2>&1\n"
 
-    echo "节点 $node_id 部署完成，'aios-cli start --connect' 已在屏幕内运行，系统已恢复到后台。"
+    echo "部署hyperspace节点完成，'aios-cli start --connect' 已在屏幕内运行，系统已恢复到后台。"
+
+    # 提示用户按任意键返回主菜单
+    read -n 1 -s -r -p "按任意键返回主菜单..."
+    main_menu
 }
 
-# 退出脚本
-function exit_script() {
-    echo "退出脚本..."
-    exit 0
-}
+# 其他函数保持不变...
 
-# 启动主菜单
-function main_menu() {
-    while true; do
-        echo "请选择要执行的操作:"
-        echo "1. 部署多个hyperspace节点"
-        echo "2. 查看日志"
-        echo "3. 查看积分"
-        echo "4. 删除节点（停止节点）"
-        echo "5. 启用日志监控"
-        echo "6. 查看使用的私钥"
-        echo "7. 退出脚本"
-        echo "================================================================"
-        read -p "请输入选择 (1/2/3/4/5/6/7): " choice
-        case $choice in
-            1)
-                read -p "请输入要部署的节点数量: " num_nodes
-                for i in $(seq 1 $num_nodes); do
-                    deploy_single_node $i
-                done
-                ;;
-            2)
-                echo "查看日志功能待实现"
-                ;;
-            3)
-                echo "查看积分功能待实现"
-                ;;
-            4)
-                echo "删除节点功能待实现"
-                ;;
-            5)
-                echo "启用日志监控功能待实现"
-                ;;
-            6)
-                echo "查看使用的私钥功能待实现"
-                ;;
-            7)
-                exit_script
-                ;;
-            *)
-                echo "无效选择，请重新输入。"
-                ;;
-        esac
-    done
-}
-
-# 启动脚本
+# 调用主菜单函数
 main_menu

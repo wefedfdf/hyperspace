@@ -111,35 +111,42 @@ function deploy_hyperspace_node() {
         sleep 15
     done
 
-    # 私钥导入逻辑
-    echo "请输入私钥（按 CTRL+D 结束）："
-    tmpfile=$(mktemp)
-    cat > "$tmpfile"
-    
-    if [ -s "$tmpfile" ]; then
-        echo "正在导入私钥..."
-        # 清理私钥格式
-        sed -i 's/[[:space:]]*$//' "$tmpfile"
-        sed -i '/^$/d' "$tmpfile"
+    # 多私钥导入逻辑
+    while true; do
+        echo "请输入私钥（按 CTRL+D 结束）："
+        tmpfile=$(mktemp)
+        cat > "$tmpfile"
         
-        # 尝试多种方式导入私钥
-        if ! aios-cli hive import-keys "$tmpfile" 2>/dev/null; then
-            key_content=$(cat "$tmpfile")
-            if ! echo "$key_content" | aios-cli hive import-keys - 2>/dev/null; then
-                echo "私钥导入失败，请确保格式正确"
-                rm "$tmpfile"
-                read -n 1 -s -r -p "按任意键返回主菜单..."
-                return
+        if [ -s "$tmpfile" ]; then
+            echo "正在导入私钥..."
+            # 清理私钥格式
+            sed -i 's/[[:space:]]*$//' "$tmpfile"
+            sed -i '/^$/d' "$tmpfile"
+            
+            # 尝试多种方式导入私钥
+            if ! aios-cli hive import-keys "$tmpfile" 2>/dev/null; then
+                key_content=$(cat "$tmpfile")
+                if ! echo "$key_content" | aios-cli hive import-keys - 2>/dev/null; then
+                    echo "私钥导入失败，请确保格式正确"
+                    rm "$tmpfile"
+                    read -n 1 -s -r -p "按任意键返回主菜单..."
+                    return
+                fi
             fi
+            echo "私钥导入成功！"
+        else
+            echo "未输入私钥"
+            rm "$tmpfile"
+            read -n 1 -s -r -p "按任意键返回主菜单..."
+            return
         fi
-        echo "私钥导入成功！"
-    else
-        echo "未输入私钥"
         rm "$tmpfile"
-        read -n 1 -s -r -p "按任意键返回主菜单..."
-        return
-    fi
-    rm "$tmpfile"
+
+        read -p "是否要导入另一个私钥？(y/n): " another_key
+        if [[ "${another_key,,}" != "y" ]]; then
+            break
+        fi
+    done
 
     # 添加模型
     echo "正在添加模型..."

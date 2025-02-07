@@ -142,6 +142,13 @@ function deploy_hyperspace_node() {
         fi
         rm "$tmpfile"
 
+        # 在每次导入私钥后，重置 aios-cli 状态
+        echo "重置 aios-cli 状态..."
+        aios-cli kill
+        sleep 5
+        aios-cli start
+        sleep 15
+
         read -p "是否要导入另一个私钥？(y/n): " another_key
         if [[ "${another_key,,}" != "y" ]]; then
             break

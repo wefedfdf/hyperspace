@@ -1,8 +1,5 @@
 #!/bin/bash
 
-# 脚本保存路径
-SCRIPT_PATH="$HOME/Hyperspace.sh"
-
 # 主菜单函数
 function main_menu() {
     while true; do
@@ -90,16 +87,11 @@ function deploy_single_node() {
     echo "创建一个名为 '$screen_name' 的屏幕会话..."
     screen -S "$screen_name" -dm
 
-    # 在屏幕会话中运行 aios-cli start
-    echo "在屏幕会话 '$screen_name' 中运行 'aios-cli start' 命令..."
+    # 在屏幕会话中启动 aiOs 守护进程
+    echo "启动 aiOs 守护进程..."
     screen -S "$screen_name" -X stuff "aios-cli start\n"
 
-    # 等待几秒钟确保命令执行
-    sleep 5
-
-    # 退出屏幕会话
-    echo "退出屏幕会话 '$screen_name'..."
-    screen -S "$screen_name" -X detach
+    # 等待几秒钟确保守护进程已启动
     sleep 5
 
     # 提示用户输入私钥
@@ -112,12 +104,19 @@ function deploy_single_node() {
     aios-cli hive import-keys "./private_key_$node_id.pem"
     sleep 5
 
-    # 添加模型并重试
-    model="hf:TheBloke/phi-2-GGUF:phi-2.Q4_K_M.gguf"
+    # 如果导入失败，尝试启动守护进程
+    if [[ $? -ne 0 ]]; then
+        echo "导入私钥失败，尝试启动守护进程并重试..."
+        screen -S "$screen_name" -X stuff "aios-cli start\n"
+        sleep 10
+        aios-cli hive import-keys "./private_key_$node_id.pem"
+    fi
+
+    # 添加模型
     echo "正在通过命令 'aios-cli models add' 添加模型..."
     while true; do
-        if aios-cli models add "$model"; then
-            echo "模型添加成功并且下载完成！"
+        if aios-cli models add "hf:TheBloke/phi-2-GGUF:phi-2.Q4_K_M.gguf"; then
+            echo "模型添加成功！"
             break
         else
             echo "添加模型时发生错误，正在重试..."
@@ -156,80 +155,6 @@ function deploy_single_node() {
     screen -S "$screen_name" -X stuff "aios-cli start --connect >> /root/aios-cli.log 2>&1\n"
 
     echo "节点 $node_id 部署完成，'aios-cli start --connect' 已在屏幕内运行，系统已恢复到后台。"
-}
-
-# 查看积分
-function view_points() {
-    echo "正在查看积分..."
-    source /root/.bashrc
-    aios-cli hive points
-    sleep 5
-}
-
-# 删除节点（停止节点）
-function delete_node() {
-    echo "正在使用 'aios-cli kill' 停止节点..."
-
-    # 执行 aios-cli kill 停止节点
-    aios-cli kill
-    sleep 2
-
-    echo "'aios-cli kill' 执行完成，节点已停止。"
-
-    read -n 1 -s -r -p "按任意键返回主菜单..."
-    main_menu
-}
-
-# 启用日志监控
-function start_log_monitor() {
-    echo "启动日志监控..."
-    cat > /root/monitor.sh << 'EOL'
-#!/bin/bash
-LOG_FILE="/root/aios-cli.log"
-SCREEN_NAME="node"
-LAST_RESTART=$(date +%s)
-MIN_RESTART_INTERVAL=300
-
-while true; do
-    current_time=$(date +%s)
-    
-    if (tail -n 4 "$LOG_FILE" | grep -q "Last pong received.*Sending reconnect signal" || \
-        tail -n 4 "$LOG_FILE" | grep -q "Failed to authenticate" || \
-        tail -n 4 "$LOG_FILE" | grep -q "Failed to connect to Hive") && \
-       [ $((current_time - LAST_RESTART)) -gt $MIN_RESTART_INTERVAL ]; then
-        echo "$(date): 检测到连接问题，正在重启服务..." >> /root/monitor.log
-        screen -S "$SCREEN_NAME" -X stuff $'\003'
-        sleep 5
-        screen -S "$SCREEN_NAME" -X stuff "aios-cli kill\n"
-        sleep 5
-        echo "$(date): 清理旧日志..." > "$LOG_FILE"
-        screen -S "$SCREEN_NAME" -X stuff "aios-cli start --connect >> /root/aios-cli.log 2>&1\n"
-        LAST_RESTART=$current_time
-        echo "$(date): 服务已重启" >> /root/monitor.log
-    fi
-    sleep 30
-done
-EOL
-
-    chmod +x /root/monitor.sh
-    nohup /root/monitor.sh > /root/monitor.log 2>&1 &
-    echo "日志监控已启动，后台运行中。"
-    read -n 1 -s -r -p "按任意键返回主菜单..."
-    main_menu
-}
-
-# 查看日志
-function view_logs() {
-    echo "查看日志..."
-    tail -f /root/aios-cli.log
-}
-
-# 查看私钥
-function view_private_key() {
-    echo "查看私钥..."
-    cat /root/private_key_1.pem
-    read -n 1 -s -r -p "按任意键返回主菜单..."
-    main_menu
 }
 
 # 退出脚本

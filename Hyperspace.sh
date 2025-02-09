@@ -111,8 +111,16 @@ function deploy_hyperspace_node() {
     # 为每个节点执行部署
     for ((i=1; i<=node_count; i++)); do
         echo "部署节点 $i..."
-        deploy_single_node "$i"
+        if ! deploy_single_node "$i"; then
+            echo "节点 $i 部署失败，是否继续部署其他节点？(y/n)"
+            read -p "请选择: " continue_deploy
+            if [[ ! "$continue_deploy" =~ ^[Yy]$ ]]; then
+                break
+            fi
+        fi
     done
+
+    read -n 1 -s -r -p "按任意键返回主菜单..."
 }
 
 # 部署单个节点的函数
@@ -122,29 +130,28 @@ function deploy_single_node() {
     
     # 执行安装命令
     echo "正在执行安装命令：curl https://download.hyper.space/api/install | bash"
-    if ! curl https://download.hyper.space/api/install | bash; then
+    if ! curl -s https://download.hyper.space/api/install | bash; then
         echo "安装失败，请检查网络连接或重试"
         return 1
     fi
 
     # 等待安装完成并刷新环境变量
     sleep 5
+    
+    # 检查 aios-cli 是否已安装
+    if [ ! -f "/root/.aios/aios-cli" ]; then
+        echo "错误：aios-cli 安装失败，文件不存在"
+        return 1
+    fi
+
+    # 更新 PATH
     export PATH="/root/.aios:$PATH"
     source /root/.bashrc
 
-    # 验证aios-cli是否可用
-    if ! command -v aios-cli &> /dev/null; then
-        echo "错误：aios-cli 安装失败，尝试添加到 PATH"
-        if [ -f "/root/.aios/aios-cli" ]; then
-            export PATH="/root/.aios:$PATH"
-            if ! command -v aios-cli &> /dev/null; then
-                echo "错误：无法找到 aios-cli，请检查安装"
-                return 1
-            fi
-        else
-            echo "错误：找不到 aios-cli 文件"
-            return 1
-        fi
+    # 验证 aios-cli 是否可用并检查版本
+    if ! aios-cli --version &>/dev/null; then
+        echo "错误：aios-cli 命令无法执行"
+        return 1
     fi
 
     # 清理已存在的屏幕会话
@@ -159,11 +166,6 @@ function deploy_single_node() {
     echo "创建一个名为 '$screen_name' 的屏幕会话..."
     screen -dmS "$screen_name"
     sleep 2
-
-    # 在屏幕会话中运行 aios-cli start
-    echo "在屏幕会话 '$screen_name' 中运行 'aios-cli start' 命令..."
-    screen -S "$screen_name" -X stuff "aios-cli start\n"
-    sleep 5
 
     # 创建私钥目录
     mkdir -p "$HOME/.hyperspace/keys"
@@ -184,12 +186,25 @@ function deploy_single_node() {
         return 1
     fi
 
+    # 导入私钥前先初始化
+    echo "初始化节点..."
+    if ! aios-cli start; then
+        echo "错误：节点初始化失败"
+        return 1
+    fi
+    sleep 5
+    
+    # 停止初始化的进程
+    aios-cli kill
+    sleep 2
+
     # 导入私钥
     echo "正在导入私钥..."
     if ! aios-cli hive import-keys "$key_file"; then
         echo "错误：私钥导入失败"
         return 1
     fi
+    sleep 2
 
     # 添加模型
     local model="hf:TheBloke/phi-2-GGUF:phi-2.Q4_K_M.gguf"
@@ -216,6 +231,7 @@ function deploy_single_node() {
         echo "错误：Hive 登录失败"
         return 1
     fi
+    sleep 2
 
     # 选择等级
     echo "请为节点 $node_num 选择等级（1-5）："
@@ -236,9 +252,6 @@ function deploy_single_node() {
         echo "错误：Hive 连接失败"
         return 1
     fi
-
-    # 停止现有进程
-    aios-cli kill
     sleep 2
 
     # 在屏幕会话中启动节点
@@ -247,6 +260,7 @@ function deploy_single_node() {
 
     echo "节点 $node_num 部署完成"
     sleep 2
+    return 0
 }
 
 # 查看积分

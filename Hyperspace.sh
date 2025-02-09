@@ -98,167 +98,126 @@ function view_all_keys() {
 
 # 部署hyperspace节点
 function deploy_hyperspace_node() {
-    # 执行安装命令
-    echo "正在执行安装命令：curl https://download.hyper.space/api/install | bash"
-    curl https://download.hyper.space/api/install | bash
-
-    # 获取安装后新添加的路径
-    NEW_PATH=$(bash -c 'source /root/.bashrc && echo $PATH')
+    # 询问要部署的节点数量
+    read -p "请输入要部署的节点数量: " node_count
     
-    # 更新当前shell的PATH
-    export PATH="$NEW_PATH"
-
-    # 验证aios-cli是否可用
-    if ! command -v aios-cli &> /dev/null; then
-        echo "aios-cli 命令未找到，正在重试..."
-        sleep 3
-        # 再次尝试更新PATH
-        export PATH="$PATH:/root/.local/bin"
-        if ! command -v aios-cli &> /dev/null; then
-            echo "无法找到 aios-cli 命令，请手动运行 'source /root/.bashrc' 后重试"
-            read -n 1 -s -r -p "按任意键返回主菜单..."
-            return
-        fi
-    fi
-
-    # 提示输入屏幕名称，默认值为 'hyper'
-    read -p "请输入屏幕名称 (默认值: hyper): " screen_name
-    screen_name=${screen_name:-hyper}
-    echo "使用的屏幕名称是: $screen_name"
-
-    # 清理已存在的 'hyper' 屏幕会话
-    echo "检查并清理现有的 'hyper' 屏幕会话..."
-    screen -ls | grep "$screen_name" &>/dev/null
-    if [ $? -eq 0 ]; then
-        echo "找到现有的 '$screen_name' 屏幕会话，正在停止并删除..."
-        screen -S "$screen_name" -X quit
-        sleep 2
-    else
-        echo "没有找到现有的 '$screen_name' 屏幕会话。"
-    fi
-
-    # 创建一个新的屏幕会话
-    echo "创建一个名为 '$screen_name' 的屏幕会话..."
-    screen -S "$screen_name" -dm
-
-    # 在屏幕会话中运行 aios-cli start
-    echo "在屏幕会话 '$screen_name' 中运行 'aios-cli start' 命令..."
-    screen -S "$screen_name" -X stuff "aios-cli start\n"
-
-    # 等待几秒钟确保命令执行
-    sleep 5
-
-    # 退出屏幕会话
-    echo "退出屏幕会话 '$screen_name'..."
-    screen -S "$screen_name" -X detach
-    sleep 5
-    
-    # 确保环境变量已经生效
-    echo "确保环境变量更新..."
-    source /root/.bashrc
-    sleep 4  # 等待4秒确保环境变量加载
-
-    # 打印当前 PATH，确保 aios-cli 在其中
-    echo "当前 PATH: $PATH"
-
-    # 提示用户输入私钥
-    echo "请选择私钥输入方式："
-    echo "1. 直接输入新私钥"
-    echo "2. 使用已保存的私钥"
-    read -p "请选择 (1/2): " key_choice
-
-    case $key_choice in
-        1)
-            echo "请输入新私钥（按 CTRL+D 结束）："
-            mkdir -p "$HOME/.hyperspace/keys"
-            key_file="$HOME/.hyperspace/keys/key_$(date +%s).pem"
-            cat > "$key_file"
-            if [ $? -ne 0 ]; then
-                echo "保存私钥失败！"
-                rm "$key_file" 2>/dev/null
-                read -n 1 -s -r -p "按任意键返回主菜单..."
-                return
-            fi
-            ;;
-        2)
-            echo "已保存的私钥："
-            ls -1 "$HOME/.hyperspace/keys" 2>/dev/null
-            read -p "请输入要使用的私钥文件名: " key_name
-            key_file="$HOME/.hyperspace/keys/$key_name"
-            if [ ! -f "$key_file" ]; then
-                echo "私钥文件不存在！"
-                read -n 1 -s -r -p "按任意键返回主菜单..."
-                return
-            fi
-            ;;
-        *)
-            echo "无效选择！"
-            read -n 1 -s -r -p "按任意键返回主菜单..."
-            return
-            ;;
-    esac
-
-    # 导入私钥
-    echo "正在导入私钥..."
-    if ! aios-cli hive import-keys "$key_file"; then
-        echo "导入私钥失败！"
+    # 验证输入是否为正整数
+    if ! [[ "$node_count" =~ ^[1-9][0-9]*$ ]]; then
+        echo "错误：请输入有效的正整数"
         read -n 1 -s -r -p "按任意键返回主菜单..."
         return
     fi
 
-    # 定义模型变量
-    model="hf:TheBloke/phi-2-GGUF:phi-2.Q4_K_M.gguf"
+    # 为每个节点执行部署
+    for ((i=1; i<=node_count; i++)); do
+        echo "部署节点 $i..."
+        deploy_single_node "$i"
+    done
+}
 
-    # 添加模型并重试
-    echo "正在通过命令 'aios-cli models add' 添加模型..."
-    while true; do
+# 部署单个节点的函数
+function deploy_single_node() {
+    local node_num=$1
+    local screen_name="node_$(date +%s)"
+    
+    # 执行安装命令
+    echo "正在执行安装命令：curl https://download.hyper.space/api/install | bash"
+    if ! curl https://download.hyper.space/api/install | bash; then
+        echo "安装失败，请检查网络连接或重试"
+        return 1
+    fi
+
+    # 等待安装完成并刷新环境变量
+    sleep 5
+    source /root/.bashrc
+    export PATH="$PATH:/root/.local/bin"
+
+    # 验证aios-cli是否可用
+    if ! command -v aios-cli &> /dev/null; then
+        echo "错误：aios-cli 安装失败"
+        return 1
+    fi
+
+    # 清理已存在的屏幕会话
+    echo "检查并清理现有的 '$screen_name' 屏幕会话..."
+    screen -ls | grep "$screen_name" &>/dev/null && screen -S "$screen_name" -X quit
+
+    # 创建新的屏幕会话
+    echo "创建一个名为 '$screen_name' 的屏幕会话..."
+    screen -dmS "$screen_name"
+
+    # 创建私钥目录
+    mkdir -p "$HOME/.hyperspace/keys"
+    local key_file="$HOME/.hyperspace/keys/node${node_num}_$(date +%s).pem"
+
+    # 获取私钥
+    echo "请输入节点 $node_num 的私钥（按 CTRL+D 结束）："
+    if ! cat > "$key_file"; then
+        echo "错误：私钥保存失败"
+        rm -f "$key_file"
+        return 1
+    fi
+
+    # 导入私钥
+    echo "正在导入私钥..."
+    if ! aios-cli hive import-keys "$key_file"; then
+        echo "错误：私钥导入失败"
+        return 1
+    fi
+
+    # 添加模型
+    local model="hf:TheBloke/phi-2-GGUF:phi-2.Q4_K_M.gguf"
+    echo "正在添加模型..."
+    local retry_count=0
+    while [ $retry_count -lt 3 ]; do
         if aios-cli models add "$model"; then
-            echo "模型添加成功并且下载完成！"
+            break
+        fi
+        ((retry_count++))
+        echo "添加模型失败，重试 $retry_count/3..."
+        sleep 3
+    done
+
+    if [ $retry_count -eq 3 ]; then
+        echo "错误：模型添加失败"
+        return 1
+    fi
+
+    # 登录到 Hive
+    echo "正在登录到 Hive..."
+    if ! aios-cli hive login; then
+        echo "错误：Hive 登录失败"
+        return 1
+    fi
+
+    # 选择等级
+    echo "请为节点 $node_num 选择等级（1-5）："
+    select tier in 1 2 3 4 5; do
+        if [[ "$tier" =~ ^[1-5]$ ]]; then
+            if ! aios-cli hive select-tier "$tier"; then
+                echo "错误：等级选择失败"
+                return 1
+            fi
             break
         else
-            echo "添加模型时发生错误，正在重试..."
-            sleep 3
+            echo "请选择有效的等级（1-5）"
         fi
     done
 
-    # 登录并选择等级
-    echo "正在登录并选择等级..."
-
-    # 登录到 Hive
-    aios-cli hive login
-
-    # 提示用户选择等级
-    echo "请选择等级（1-5）："
-    select tier in 1 2 3 4 5; do
-        case $tier in
-            1|2|3|4|5)
-                echo "你选择了等级 $tier"
-                aios-cli hive select-tier $tier
-                break
-                ;;
-            *)
-                echo "无效的选择，请输入 1 到 5 之间的数字。"
-                ;;
-        esac
-    done
-
     # 连接到 Hive
-    aios-cli hive connect
-    sleep 5
+    if ! aios-cli hive connect; then
+        echo "错误：Hive 连接失败"
+        return 1
+    fi
 
-    # 停止 aios-cli 进程
-    echo "使用 'aios-cli kill' 停止 'aios-cli start' 进程..."
+    # 停止现有进程
     aios-cli kill
 
-    # 在屏幕会话中运行 aios-cli start，并定向日志文件
-    echo "在屏幕会话 '$screen_name' 中运行 'aios-cli start --connect'，并将输出定向到 '/root/aios-cli.log'..."
-    screen -S "$screen_name" -X stuff "aios-cli start --connect >> /root/aios-cli.log 2>&1\n"
+    # 在屏幕会话中启动节点
+    screen -S "$screen_name" -X stuff "aios-cli start --connect >> /root/aios-cli_node${node_num}.log 2>&1\n"
 
-    echo "部署hyperspace节点完成，'aios-cli start --connect' 已在屏幕内运行，系统已恢复到后台。"
-
-    # 提示用户按任意键返回主菜单
-    read -n 1 -s -r -p "按任意键返回主菜单..."
-    main_menu
+    echo "节点 $node_num 部署完成"
+    sleep 2
 }
 
 # 查看积分

@@ -118,7 +118,7 @@ function deploy_hyperspace_node() {
 # 部署单个节点的函数
 function deploy_single_node() {
     local node_num=$1
-    local screen_name="node_$(date +%s)"
+    local screen_name="hyper_${node_num}"
     
     # 执行安装命令
     echo "正在执行安装命令：curl https://download.hyper.space/api/install | bash"
@@ -129,22 +129,41 @@ function deploy_single_node() {
 
     # 等待安装完成并刷新环境变量
     sleep 5
+    export PATH="/root/.aios:$PATH"
     source /root/.bashrc
-    export PATH="$PATH:/root/.local/bin"
 
     # 验证aios-cli是否可用
     if ! command -v aios-cli &> /dev/null; then
-        echo "错误：aios-cli 安装失败"
-        return 1
+        echo "错误：aios-cli 安装失败，尝试添加到 PATH"
+        if [ -f "/root/.aios/aios-cli" ]; then
+            export PATH="/root/.aios:$PATH"
+            if ! command -v aios-cli &> /dev/null; then
+                echo "错误：无法找到 aios-cli，请检查安装"
+                return 1
+            fi
+        else
+            echo "错误：找不到 aios-cli 文件"
+            return 1
+        fi
     fi
 
     # 清理已存在的屏幕会话
     echo "检查并清理现有的 '$screen_name' 屏幕会话..."
-    screen -ls | grep "$screen_name" &>/dev/null && screen -S "$screen_name" -X quit
+    screen -ls | grep "$screen_name" &>/dev/null && {
+        echo "找到现有的 '$screen_name' 屏幕会话，正在停止并删除..."
+        screen -S "$screen_name" -X quit
+        sleep 2
+    }
 
     # 创建新的屏幕会话
     echo "创建一个名为 '$screen_name' 的屏幕会话..."
     screen -dmS "$screen_name"
+    sleep 2
+
+    # 在屏幕会话中运行 aios-cli start
+    echo "在屏幕会话 '$screen_name' 中运行 'aios-cli start' 命令..."
+    screen -S "$screen_name" -X stuff "aios-cli start\n"
+    sleep 5
 
     # 创建私钥目录
     mkdir -p "$HOME/.hyperspace/keys"
@@ -154,6 +173,13 @@ function deploy_single_node() {
     echo "请输入节点 $node_num 的私钥（按 CTRL+D 结束）："
     if ! cat > "$key_file"; then
         echo "错误：私钥保存失败"
+        rm -f "$key_file"
+        return 1
+    fi
+
+    # 确保私钥文件不为空
+    if [ ! -s "$key_file" ]; then
+        echo "错误：私钥文件为空"
         rm -f "$key_file"
         return 1
     fi
@@ -171,6 +197,7 @@ function deploy_single_node() {
     local retry_count=0
     while [ $retry_count -lt 3 ]; do
         if aios-cli models add "$model"; then
+            echo "模型添加成功！"
             break
         fi
         ((retry_count++))
@@ -212,8 +239,10 @@ function deploy_single_node() {
 
     # 停止现有进程
     aios-cli kill
+    sleep 2
 
     # 在屏幕会话中启动节点
+    echo "启动节点 $node_num..."
     screen -S "$screen_name" -X stuff "aios-cli start --connect >> /root/aios-cli_node${node_num}.log 2>&1\n"
 
     echo "节点 $node_num 部署完成"
@@ -250,40 +279,51 @@ function start_log_monitor() {
     # 创建监控脚本文件
     cat > /root/monitor.sh << 'EOL'
 #!/bin/bash
-LOG_FILE="/root/aios-cli.log"
-SCREEN_NAME="hyper"
+
+# 获取所有 hyper_ 开头的 screen 会话
+get_node_screens() {
+    screen -ls | grep 'hyper_' | cut -d. -f1 | awk '{print $1}'
+}
+
 LAST_RESTART=$(date +%s)
 MIN_RESTART_INTERVAL=300
 
 while true; do
     current_time=$(date +%s)
     
-    # 检测到以下几种情况，触发重启
-    if (tail -n 4 "$LOG_FILE" | grep -q "Last pong received.*Sending reconnect signal" || \
-        tail -n 4 "$LOG_FILE" | grep -q "Failed to authenticate" || \
-        tail -n 4 "$LOG_FILE" | grep -q "Failed to connect to Hive" || \
-        tail -n 4 "$LOG_FILE" | grep -q "Another instance is already running" || \
-        tail -n 4 "$LOG_FILE" | grep -q "\"message\": \"Internal server error\"" || \
-        tail -n 4 "$LOG_FILE" | grep -q "thread 'main' panicked at aios-cli/src/main.rs:181:39: called \`Option::unwrap()\` on a \`None\` value") && \
-       [ $((current_time - LAST_RESTART)) -gt $MIN_RESTART_INTERVAL ]; then
-        echo "$(date): 检测到连接问题、认证失败、连接到 Hive 失败、实例已在运行、内部服务器错误或 'Option::unwrap()' 错误，正在重启服务..." >> /root/monitor.log
+    # 遍历所有节点的 screen 会话
+    for screen_name in $(get_node_screens); do
+        node_num=$(echo "$screen_name" | cut -d'_' -f2)
+        LOG_FILE="/root/aios-cli_node${node_num}.log"
         
-        # 先发送 Ctrl+C
-        screen -S "$SCREEN_NAME" -X stuff $'\003'
-        sleep 5
-        
-        # 执行 aios-cli kill
-        screen -S "$SCREEN_NAME" -X stuff "aios-cli kill\n"
-        sleep 5
-        
-        echo "$(date): 清理旧日志..." > "$LOG_FILE"
-        
-        # 重新启动服务
-        screen -S "$SCREEN_NAME" -X stuff "aios-cli start --connect >> /root/aios-cli.log 2>&1\n"
-        
-        LAST_RESTART=$current_time
-        echo "$(date): 服务已重启" >> /root/monitor.log
-    fi
+        # 检测到以下几种情况，触发重启
+        if (tail -n 4 "$LOG_FILE" 2>/dev/null | grep -q "Last pong received.*Sending reconnect signal" || \
+            tail -n 4 "$LOG_FILE" 2>/dev/null | grep -q "Failed to authenticate" || \
+            tail -n 4 "$LOG_FILE" 2>/dev/null | grep -q "Failed to connect to Hive" || \
+            tail -n 4 "$LOG_FILE" 2>/dev/null | grep -q "Another instance is already running" || \
+            tail -n 4 "$LOG_FILE" 2>/dev/null | grep -q "\"message\": \"Internal server error\"" || \
+            tail -n 4 "$LOG_FILE" 2>/dev/null | grep -q "thread 'main' panicked at") && \
+           [ $((current_time - LAST_RESTART)) -gt $MIN_RESTART_INTERVAL ]; then
+            
+            echo "$(date): 节点 $node_num 检测到错误，正在重启..." >> /root/monitor.log
+            
+            # 先发送 Ctrl+C
+            screen -S "$screen_name" -X stuff $'\003'
+            sleep 5
+            
+            # 执行 aios-cli kill
+            screen -S "$screen_name" -X stuff "aios-cli kill\n"
+            sleep 5
+            
+            echo "$(date): 清理节点 $node_num 的日志..." > "$LOG_FILE"
+            
+            # 重新启动服务
+            screen -S "$screen_name" -X stuff "aios-cli start --connect >> $LOG_FILE 2>&1\n"
+            
+            LAST_RESTART=$current_time
+            echo "$(date): 节点 $node_num 已重启" >> /root/monitor.log
+        fi
+    done
     sleep 30
 done
 EOL
@@ -297,10 +337,6 @@ EOL
     echo "日志监控已启动，后台运行中。"
     echo "可以通过查看 /root/monitor.log 来检查监控状态"
     sleep 2
-
-    # 提示用户按任意键返回主菜单
-    read -n 1 -s -r -p "按任意键返回主菜单..."
-    main_menu
 }
 
 # 查看日志

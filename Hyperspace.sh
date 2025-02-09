@@ -72,15 +72,38 @@ function add_new_key() {
     
     if [ $? -eq 0 ]; then
         echo "私钥已保存到: $key_file"
-        # 导入新私钥
-        if aios-cli hive import-keys "$key_file"; then
-            echo "私钥导入成功！"
-        else
-            echo "私钥导入失败，请检查私钥格式是否正确"
+        
+        # 检查私钥格式
+        if ! grep -q "^[a-zA-Z0-9+/]\{43\}=$" "$key_file"; then
+            echo "错误：私钥格式不正确 (Line 228)"
+            echo "私钥应该是44个字符的Base64字符串"
             rm "$key_file"
+            read -n 1 -s -r -p "按任意键继续..."
+            return 1
         fi
+
+        # 尝试导入私钥
+        if ! aios-cli hive import-keys "$key_file" 2>&1 | tee /tmp/import_error.log; then
+            echo "错误：私钥导入失败 (Line 237)"
+            echo "导入错误信息："
+            cat /tmp/import_error.log
+            rm -f /tmp/import_error.log
+            rm "$key_file"
+            read -n 1 -s -r -p "按任意键继续..."
+            return 1
+        fi
+
+        # 验证私钥是否成功导入
+        if ! aios-cli hive whoami 2>/dev/null | grep -q "Account"; then
+            echo "错误：私钥导入后验证失败 (Line 247)"
+            rm "$key_file"
+            read -n 1 -s -r -p "按任意键继续..."
+            return 1
+        fi
+
+        echo "私钥导入成功！"
     else
-        echo "保存私钥时发生错误"
+        echo "错误：保存私钥时发生错误 (Line 254)"
         rm "$key_file" 2>/dev/null
     fi
     
@@ -189,7 +212,7 @@ function deploy_single_node() {
     # 导入私钥前先初始化
     echo "初始化节点..."
     if ! aios-cli start; then
-        echo "错误：节点初始化失败"
+        echo "错误：节点初始化失败 (Line 180)"
         return 1
     fi
     sleep 5
@@ -200,11 +223,29 @@ function deploy_single_node() {
 
     # 导入私钥
     echo "正在导入私钥..."
-    if ! aios-cli hive import-keys "$key_file"; then
-        echo "错误：私钥导入失败"
+    # 检查私钥文件格式
+    if ! grep -q "^[a-zA-Z0-9+/]\{43\}=$" "$key_file"; then
+        echo "错误：私钥格式不正确 (Line 192)"
+        echo "私钥应该是44个字符的Base64字符串"
+        cat "$key_file"
+        return 1
+    fi
+
+    # 尝试导入私钥
+    if ! aios-cli hive import-keys "$key_file" 2>&1 | tee /tmp/import_error.log; then
+        echo "错误：私钥导入失败 (Line 200)"
+        echo "导入错误信息："
+        cat /tmp/import_error.log
+        rm -f /tmp/import_error.log
         return 1
     fi
     sleep 2
+
+    # 验证私钥是否成功导入
+    if ! aios-cli hive whoami 2>/dev/null | grep -q "Account"; then
+        echo "错误：私钥导入后验证失败 (Line 209)"
+        return 1
+    fi
 
     # 添加模型
     local model="hf:TheBloke/phi-2-GGUF:phi-2.Q4_K_M.gguf"

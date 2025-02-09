@@ -211,85 +211,49 @@ function deploy_single_node() {
 
     # 导入私钥前先初始化
     echo "初始化节点..."
-    if ! aios-cli start 2>&1; then
-        echo "错误：节点初始化失败 (Line 180)"
-        echo "错误详情："
-        aios-cli start 2>&1
+    echo "运行命令：aios-cli start"
+    if ! aios-cli start; then
+        echo "错误：节点初始化失败"
+        echo "请确保没有其他 aios-cli 实例在运行"
         return 1
     fi
     sleep 5
     
     # 停止初始化的进程
+    echo "停止初始化进程..."
     aios-cli kill
     sleep 2
 
     # 导入私钥
     echo "正在导入私钥..."
-
-    # 1. 检查私钥文件是否存在
-    if [ ! -f "$key_file" ]; then
-        echo "错误1：私钥文件不存在 (Line 192)"
-        echo "文件路径: $key_file"
-        return 1
-    fi
-
-    # 2. 检查私钥文件权限
-    if [ ! -r "$key_file" ]; then
-        echo "错误2：私钥文件无法读取，请检查文件权限 (Line 198)"
-        ls -l "$key_file"
-        return 1
-    fi
-
-    # 3. 检查私钥格式
-    if ! grep -q "^[a-zA-Z0-9+/]\{43\}=$" "$key_file"; then
-        echo "错误3：私钥格式不正确 (Line 204)"
-        echo "私钥应该是44个字符的Base64字符串"
-        echo "当前私钥内容："
-        cat "$key_file"
-        echo "当前私钥长度：$(wc -c < "$key_file") 字符"
-        return 1
-    fi
-
-    # 4. 检查aios-cli是否正常运行
-    if ! aios-cli --version &>/dev/null; then
-        echo "错误4：aios-cli 命令无法执行 (Line 213)"
-        echo "PATH环境变量："
-        echo "$PATH"
-        echo "aios-cli位置："
-        which aios-cli 2>&1 || echo "找不到 aios-cli"
-        return 1
-    fi
-
-    # 5. 尝试导入私钥
-    echo "执行导入命令：aios-cli hive import-keys $key_file"
-    if ! OUTPUT=$(aios-cli hive import-keys "$key_file" 2>&1); then
-        echo "错误5：私钥导入失败 (Line 223)"
-        echo "命令输出："
-        echo "$OUTPUT"
+    echo "运行命令：aios-cli hive import-keys $key_file"
+    if ! aios-cli hive import-keys "$key_file"; then
+        echo "错误：私钥导入失败"
         echo "可能的原因："
-        echo "- 私钥格式不正确"
-        echo "- 私钥已经被导入"
-        echo "- aios-cli服务未正常运行"
-        echo "- 网络连接问题"
-        return 1
+        echo "1. 私钥格式不正确"
+        echo "2. 私钥已被导入"
+        echo "3. aios-cli 守护进程未运行"
+        echo ""
+        echo "尝试重新启动 aios-cli..."
+        aios-cli start
+        sleep 3
+        echo "重新尝试导入私钥..."
+        if ! aios-cli hive import-keys "$key_file"; then
+            echo "私钥导入再次失败"
+            return 1
+        fi
     fi
-
-    # 验证私钥是否成功导入
-    echo "验证私钥..."
-    if ! WHOAMI_OUTPUT=$(aios-cli hive whoami 2>&1); then
-        echo "错误6：私钥导入后验证失败 (Line 236)"
-        echo "whoami 命令输出："
-        echo "$WHOAMI_OUTPUT"
-        return 1
-    fi
-
-    echo "私钥导入成功！"
-    echo "账户信息："
-    echo "$WHOAMI_OUTPUT"
 
     # 添加模型
     local model="hf:TheBloke/phi-2-GGUF:phi-2.Q4_K_M.gguf"
     echo "正在添加模型..."
+    echo "运行命令：aios-cli models add $model"
+    
+    # 确保 aios-cli 正在运行
+    echo "确保 aios-cli 守护进程正在运行..."
+    aios-cli start
+    sleep 3
+
     local retry_count=0
     while [ $retry_count -lt 3 ]; do
         if aios-cli models add "$model"; then
@@ -297,12 +261,17 @@ function deploy_single_node() {
             break
         fi
         ((retry_count++))
-        echo "添加模型失败，重试 $retry_count/3..."
+        echo "添加模型失败 ($retry_count/3)"
+        echo "重新启动 aios-cli 并重试..."
+        aios-cli kill
+        sleep 2
+        aios-cli start
         sleep 3
     done
 
     if [ $retry_count -eq 3 ]; then
-        echo "错误：模型添加失败"
+        echo "错误：模型添加失败，已重试3次"
+        echo "请检查网络连接和 aios-cli 状态"
         return 1
     fi
 

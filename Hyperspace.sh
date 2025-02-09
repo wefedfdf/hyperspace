@@ -72,6 +72,13 @@ function import_private_key() {
 function deploy_hyperspace_node() {
     echo "开始部署 Hyperspace 节点..."
     
+    # 检查是否已有实例在运行
+    if aios-cli status &>/dev/null; then
+        echo "检测到已有实例在运行，请先停止现有实例。"
+        read -n 1 -s -r -p "按任意键返回主菜单..."
+        return
+    fi
+
     # Prompt for a unique screen session name
     read -p "请输入一个唯一的屏幕会话名称 (例如: hyper1, hyper2): " screen_name
     if [ -z "$screen_name" ]; then

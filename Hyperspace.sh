@@ -211,8 +211,10 @@ function deploy_single_node() {
 
     # 导入私钥前先初始化
     echo "初始化节点..."
-    if ! aios-cli start; then
+    if ! aios-cli start 2>&1; then
         echo "错误：节点初始化失败 (Line 180)"
+        echo "错误详情："
+        aios-cli start 2>&1
         return 1
     fi
     sleep 5
@@ -227,23 +229,26 @@ function deploy_single_node() {
     if ! grep -q "^[a-zA-Z0-9+/]\{43\}=$" "$key_file"; then
         echo "错误：私钥格式不正确 (Line 192)"
         echo "私钥应该是44个字符的Base64字符串"
+        echo "当前私钥内容："
         cat "$key_file"
         return 1
     fi
 
     # 尝试导入私钥
-    if ! aios-cli hive import-keys "$key_file" 2>&1 | tee /tmp/import_error.log; then
+    echo "执行导入命令：aios-cli hive import-keys $key_file"
+    if ! aios-cli hive import-keys "$key_file" 2>&1; then
         echo "错误：私钥导入失败 (Line 200)"
-        echo "导入错误信息："
-        cat /tmp/import_error.log
-        rm -f /tmp/import_error.log
+        echo "请检查私钥格式是否正确"
         return 1
     fi
     sleep 2
 
     # 验证私钥是否成功导入
-    if ! aios-cli hive whoami 2>/dev/null | grep -q "Account"; then
+    echo "验证私钥..."
+    if ! aios-cli hive whoami 2>&1; then
         echo "错误：私钥导入后验证失败 (Line 209)"
+        echo "whoami 命令输出："
+        aios-cli hive whoami 2>&1
         return 1
     fi
 

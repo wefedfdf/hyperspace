@@ -12,7 +12,7 @@ function main_menu() {
         echo "================================================================"
         echo "退出脚本1，请按键盘 ctrl + C 退出即可"
         echo "请选择要执行的操作:"
-        echo "1. 部署hypers节点6"
+        echo "1. 部署hypers节点7"
         echo "2. 查看日志"
         echo "3. 查看积分"
         echo "4. 删除节点（停止节点）"
@@ -141,6 +141,11 @@ function deploy_hyperspace_node() {
 function deploy_single_node() {
     local node_num=$1
     local screen_name="hyper_${node_num}"
+    local work_dir="/root/.aios_node${node_num}"  # 为每个节点创建独立的工作目录
+    
+    # 创建并设置工作目录
+    mkdir -p "$work_dir"
+    export AIOS_HOME="$work_dir"  # 设置 AIOS_HOME 环境变量
     
     # 执行安装命令
     echo "正在执行安装命令：curl https://download.hyper.space/api/install | bash"
@@ -225,16 +230,16 @@ function deploy_single_node() {
 
     # 导入私钥前先初始化
     echo "初始化节点..."
-    echo "运行命令：aios-cli start"
+    echo "运行命令：AIOS_HOME=$work_dir aios-cli start"
     # 在后台运行 aios-cli start
-    aios-cli start > /root/aios-cli_init.log 2>&1 &
+    AIOS_HOME="$work_dir" aios-cli start > "$work_dir/aios-cli_init.log" 2>&1 &
     # 等待守护进程启动
     sleep 5
 
     # 检查守护进程是否正在运行
-    if ! aios-cli status | grep -q "running"; then
+    if ! AIOS_HOME="$work_dir" aios-cli status | grep -q "running"; then
         echo "错误：守护进程启动失败"
-        cat /root/aios-cli_init.log
+        cat "$work_dir/aios-cli_init.log"
         return 1
     fi
 
@@ -242,25 +247,23 @@ function deploy_single_node() {
 
     # 导入私钥
     echo "正在导入私钥..."
-    echo "运行命令：aios-cli hive import-keys $key_file"
-    if ! aios-cli hive import-keys "$key_file"; then
+    echo "运行命令：AIOS_HOME=$work_dir aios-cli hive import-keys $key_file"
+    if ! AIOS_HOME="$work_dir" aios-cli hive import-keys "$key_file"; then
         echo "错误：私钥导入失败，尝试重新导入..."
-        # 显示当前私钥内容以供检查
         echo "当前私钥内容："
         cat "$key_file"
         
-        # 等待一下再重试
         sleep 3
         echo "重新尝试导入..."
-        if ! aios-cli hive import-keys "$key_file"; then
+        if ! AIOS_HOME="$work_dir" aios-cli hive import-keys "$key_file"; then
             echo "私钥导入再次失败"
             return 1
         fi
     fi
 
-    # 先登录
+    # 登录到 Hive
     echo "登录到 Hive..."
-    if ! aios-cli hive login; then
+    if ! AIOS_HOME="$work_dir" aios-cli hive login; then
         echo "错误：Hive 登录失败"
         return 1
     fi
@@ -268,7 +271,7 @@ function deploy_single_node() {
 
     # 验证私钥
     echo "验证私钥..."
-    if ! aios-cli hive whoami; then
+    if ! AIOS_HOME="$work_dir" aios-cli hive whoami; then
         echo "错误：私钥验证失败"
         return 1
     fi
@@ -278,25 +281,25 @@ function deploy_single_node() {
     # 添加模型
     local model="hf:TheBloke/phi-2-GGUF:phi-2.Q4_K_M.gguf"
     echo "正在添加模型..."
-    echo "运行命令：aios-cli models add $model"
+    echo "运行命令：AIOS_HOME=$work_dir aios-cli models add $model"
     
     # 确保 aios-cli 正在运行
     echo "确保 aios-cli 守护进程正在运行..."
-    aios-cli start
+    AIOS_HOME="$work_dir" aios-cli start
     sleep 3
 
     local retry_count=0
     while [ $retry_count -lt 3 ]; do
-        if aios-cli models add "$model"; then
+        if AIOS_HOME="$work_dir" aios-cli models add "$model"; then
             echo "模型添加成功！"
             break
         fi
         ((retry_count++))
         echo "添加模型失败 ($retry_count/3)"
         echo "重新启动 aios-cli 并重试..."
-        aios-cli kill
+        AIOS_HOME="$work_dir" aios-cli kill
         sleep 2
-        aios-cli start
+        AIOS_HOME="$work_dir" aios-cli start
         sleep 3
     done
 
@@ -308,7 +311,7 @@ function deploy_single_node() {
 
     # 登录到 Hive
     echo "正在登录到 Hive..."
-    if ! aios-cli hive login; then
+    if ! AIOS_HOME="$work_dir" aios-cli hive login; then
         echo "错误：Hive 登录失败"
         return 1
     fi
@@ -318,7 +321,7 @@ function deploy_single_node() {
     echo "请为节点 $node_num 选择等级（1-5）："
     select tier in 1 2 3 4 5; do
         if [[ "$tier" =~ ^[1-5]$ ]]; then
-            if ! aios-cli hive select-tier "$tier"; then
+            if ! AIOS_HOME="$work_dir" aios-cli hive select-tier "$tier"; then
                 echo "错误：等级选择失败"
                 return 1
             fi
@@ -329,7 +332,7 @@ function deploy_single_node() {
     done
 
     # 连接到 Hive
-    if ! aios-cli hive connect; then
+    if ! AIOS_HOME="$work_dir" aios-cli hive connect; then
         echo "错误：Hive 连接失败"
         return 1
     fi
@@ -337,7 +340,7 @@ function deploy_single_node() {
 
     # 在屏幕会话中启动节点
     echo "启动节点 $node_num..."
-    screen -S "$screen_name" -X stuff "aios-cli start --connect >> /root/aios-cli_node${node_num}.log 2>&1\n"
+    screen -S "$screen_name" -X stuff "AIOS_HOME=$work_dir aios-cli start --connect >> $work_dir/aios-cli.log 2>&1\n"
 
     echo "节点 $node_num 部署完成"
     sleep 2

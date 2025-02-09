@@ -12,7 +12,7 @@ function main_menu() {
         echo "================================================================"
         echo "退出脚本1，请按键盘 ctrl + C 退出即可"
         echo "请选择要执行的操作:"
-        echo "1. 部署hypers节点9"
+        echo "1. 部署hypers节点10"
         echo "2. 查看日志"
         echo "3. 查看积分"
         echo "4. 删除节点（停止节点）"
@@ -299,15 +299,8 @@ function deploy_single_node() {
     echo "连接到 Hive..."
     echo "运行命令：AIOS_HOME=$work_dir aios-cli hive connect"
 
-    # 先检查网络连接
-    echo "检查网络连接..."
-    if ! ping -c 1 download.hyper.space &>/dev/null; then
-        echo "错误：无法连接到 hyper.space，请检查网络"
-        return 1
-    fi
-
-    # 检查模型是否已添加
-    echo "检查模型..."
+    # 检查并选择模型
+    echo "检查并选择模型..."
     local model="hf:TheBloke/phi-2-GGUF:phi-2.Q4_K_M.gguf"
     if ! AIOS_HOME="$work_dir" aios-cli models list 2>&1 | grep -q "$model"; then
         echo "添加必需的模型..."
@@ -315,6 +308,13 @@ function deploy_single_node() {
             echo "错误：模型添加失败"
             return 1
         fi
+    fi
+
+    # 选择模型
+    echo "选择模型..."
+    if ! AIOS_HOME="$work_dir" aios-cli models select "$model" 2>&1; then
+        echo "错误：模型选择失败"
+        return 1
     fi
 
     # 尝试连接到 Hive
@@ -328,27 +328,26 @@ function deploy_single_node() {
         echo "2. 检查账户状态..."
         AIOS_HOME="$work_dir" aios-cli hive whoami
         
-        echo "3. 检查网络连接..."
-        curl -v https://download.hyper.space 2>&1
+        echo "3. 检查选中的模型..."
+        AIOS_HOME="$work_dir" aios-cli models list --selected
         
-        echo "4. 检查模型状态..."
-        AIOS_HOME="$work_dir" aios-cli models list
-        
-        echo "5. 尝试重启守护进程..."
+        echo "4. 尝试重启守护进程..."
         AIOS_HOME="$work_dir" aios-cli kill
         sleep 2
         AIOS_HOME="$work_dir" aios-cli start
         sleep 5
+        
+        echo "5. 重新选择模型..."
+        AIOS_HOME="$work_dir" aios-cli models select "$model"
+        sleep 2
         
         echo "6. 重新登录..."
         AIOS_HOME="$work_dir" aios-cli hive login
         sleep 2
         
         echo "7. 重新尝试连接..."
-        if ! AIOS_HOME="$work_dir" aios-cli hive connect 2>&1; then
+        if ! AIOS_HOME="$work_dir" aios-cli hive connect --verbose 2>&1; then
             echo "错误：Hive 连接再次失败"
-            echo "详细错误信息："
-            AIOS_HOME="$work_dir" aios-cli hive connect --verbose 2>&1
             return 1
         fi
     fi

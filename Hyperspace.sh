@@ -10,9 +10,9 @@ function main_menu() {
         echo "脚本由大赌社区哈哈哈哈编写，推特 @ferdie_jhovie，免费开源，请勿相信收费"
         echo "如有问题，可联系推特，仅此只有一个号"
         echo "================================================================"
-        echo "退出脚本11，请按键盘 ctrl + C 退出即可"
+        echo "退出脚本1，请按键盘 ctrl + C 退出即可"
         echo "请选择要执行的操作:"
-        echo "1. 部署hypers节点1"
+        echo "1. 部署hypers节点2"
         echo "2. 查看日志"
         echo "3. 查看积分"
         echo "4. 删除节点（停止节点）"
@@ -172,7 +172,7 @@ function deploy_single_node() {
     echo "$PATH"
     
     echo "4. 尝试直接执行 aios-cli"
-    /root/.aios/aios-cli --version || echo "直接执行失败"
+    /root/.aios/aios-cli --help || echo "直接执行失败"
     
     echo "5. 检查可执行权限"
     if [ ! -x "/root/.aios/aios-cli" ]; then
@@ -188,7 +188,7 @@ function deploy_single_node() {
     which aios-cli || echo "找不到 aios-cli 命令"
     
     echo "7. 再次尝试执行"
-    if ! aios-cli --version; then
+    if ! aios-cli --help >/dev/null 2>&1; then
         echo "错误：aios-cli 命令仍然无法执行"
         echo "请尝试手动执行："
         echo "export PATH=/root/.aios:\$PATH"

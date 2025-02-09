@@ -12,7 +12,7 @@ function main_menu() {
         echo "================================================================"
         echo "退出脚本1，请按键盘 ctrl + C 退出即可"
         echo "请选择要执行的操作:"
-        echo "1. 部署hypers节点2"
+        echo "1. 部署hypers节点3"
         echo "2. 查看日志"
         echo "3. 查看积分"
         echo "4. 删除节点（停止节点）"
@@ -235,13 +235,20 @@ function deploy_single_node() {
     # 导入私钥前先初始化
     echo "初始化节点..."
     echo "运行命令：aios-cli start"
-    if ! aios-cli start; then
-        echo "错误：节点初始化失败"
-        echo "请确保没有其他 aios-cli 实例在运行"
+    # 在后台运行 aios-cli start
+    aios-cli start > /root/aios-cli_init.log 2>&1 &
+    # 等待守护进程启动
+    sleep 5
+
+    # 检查守护进程是否正在运行
+    if ! aios-cli status | grep -q "running"; then
+        echo "错误：守护进程启动失败"
+        cat /root/aios-cli_init.log
         return 1
     fi
-    sleep 5
-    
+
+    echo "守护进程已成功启动"
+
     # 停止初始化的进程
     echo "停止初始化进程..."
     aios-cli kill

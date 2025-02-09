@@ -3,6 +3,9 @@
 SCRIPT_PATH="$HOME/Hyperspace.sh"
 LOG_FILE="/root/aios-cli.log"
 
+# 设置 RUST_BACKTRACE 以获取详细的回溯信息
+export RUST_BACKTRACE=1
+
 function main_menu() {
     while true; do
         clear
@@ -101,7 +104,6 @@ function deploy_hyperspace_node() {
 
     # 初始化 aios-cli
     echo "初始化 aios-cli..."
-    export RUST_BACKTRACE=1
     if ! aios-cli init; then
         echo "初始化失败，请检查系统环境"
         read -n 1 -s -r -p "按任意键返回主菜单..."

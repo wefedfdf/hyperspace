@@ -56,6 +56,14 @@ function import_private_key() {
 function deploy_hyperspace_node() {
     echo "开始部署 Hyperspace 节点..."
     
+    # Prompt for a unique screen session name
+    read -p "请输入一个唯一的屏幕会话名称 (例如: hyper1, hyper2): " screen_name
+    if [ -z "$screen_name" ]; then
+        echo "屏幕会话名称不能为空，请重试。"
+        read -n 1 -s -r -p "按任意键返回主菜单..."
+        return
+    fi
+
     # 执行安装命令
     echo "正在执行安装命令：curl https://download.hyper.space/api/install | bash"
     curl https://download.hyper.space/api/install | bash
@@ -225,6 +233,14 @@ function deploy_hyperspace_node() {
         read -n 1 -s -r -p "按任意键返回主菜单..."
         return
     fi
+
+    # Create a new screen session for the node
+    echo "创建一个名为 '$screen_name' 的屏幕会话..."
+    screen -S "$screen_name" -dm
+
+    # Run aios-cli start in the screen session
+    echo "在屏幕会话 '$screen_name' 中运行 'aios-cli start --connect' 命令..."
+    screen -S "$screen_name" -X stuff "aios-cli start --connect\n"
 
     echo "节点部署完成！服务已在后台运行"
     read -n 1 -s -r -p "按任意键返回主菜单..."

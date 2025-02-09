@@ -12,7 +12,7 @@ function main_menu() {
         echo "================================================================"
         echo "退出脚本1，请按键盘 ctrl + C 退出即可"
         echo "请选择要执行的操作:"
-        echo "1. 部署hypers节点5"
+        echo "1. 部署hypers节点6"
         echo "2. 查看日志"
         echo "3. 查看积分"
         echo "4. 删除节点（停止节点）"
@@ -258,14 +258,22 @@ function deploy_single_node() {
         fi
     fi
 
-    # 验证私钥是否成功导入
+    # 先登录
+    echo "登录到 Hive..."
+    if ! aios-cli hive login; then
+        echo "错误：Hive 登录失败"
+        return 1
+    fi
+    sleep 2
+
+    # 验证私钥
     echo "验证私钥..."
-    if ! aios-cli hive whoami | grep -q "Account"; then
-        echo "错误：私钥导入后验证失败"
+    if ! aios-cli hive whoami; then
+        echo "错误：私钥验证失败"
         return 1
     fi
 
-    echo "私钥导入成功！"
+    echo "私钥导入并验证成功！"
 
     # 添加模型
     local model="hf:TheBloke/phi-2-GGUF:phi-2.Q4_K_M.gguf"

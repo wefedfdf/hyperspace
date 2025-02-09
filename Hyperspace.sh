@@ -10,9 +10,9 @@ function main_menu() {
         echo "脚本由大赌社区哈哈哈哈编写，推特 @ferdie_jhovie，免费开源，请勿相信收费"
         echo "如有问题，可联系推特，仅此只有一个号"
         echo "================================================================"
-        echo "退出脚本，请按键盘 ctrl + C 退出即可"
+        echo "退出脚本11，请按键盘 ctrl + C 退出即可"
         echo "请选择要执行的操作:"
-        echo "1. 部署perspace节点"
+        echo "1. 部署hypers节点"
         echo "2. 查看日志"
         echo "3. 查看积分"
         echo "4. 删除节点（停止节点）"
@@ -161,21 +161,44 @@ function deploy_single_node() {
     # 等待安装完成并刷新环境变量
     sleep 5
     
-    # 检查 aios-cli 是否已安装
-    if [ ! -f "/root/.aios/aios-cli" ]; then
-        echo "错误：aios-cli 安装失败，文件不存在"
-        return 1
+    echo "=== 诊断信息 ==="
+    echo "1. 检查 aios-cli 文件"
+    ls -l /root/.aios/aios-cli || echo "文件不存在"
+    
+    echo "2. 检查文件权限"
+    stat /root/.aios/aios-cli 2>/dev/null || echo "无法获取文件状态"
+    
+    echo "3. 当前 PATH 环境变量"
+    echo "$PATH"
+    
+    echo "4. 尝试直接执行 aios-cli"
+    /root/.aios/aios-cli --version || echo "直接执行失败"
+    
+    echo "5. 检查可执行权限"
+    if [ ! -x "/root/.aios/aios-cli" ]; then
+        echo "添加执行权限..."
+        chmod +x /root/.aios/aios-cli
     fi
 
     # 更新 PATH
     export PATH="/root/.aios:$PATH"
     source /root/.bashrc
 
-    # 验证 aios-cli 是否可用并检查版本
-    if ! aios-cli --version &>/dev/null; then
-        echo "错误：aios-cli 命令无法执行"
+    echo "6. 验证 aios-cli 命令"
+    which aios-cli || echo "找不到 aios-cli 命令"
+    
+    echo "7. 再次尝试执行"
+    if ! aios-cli --version; then
+        echo "错误：aios-cli 命令仍然无法执行"
+        echo "请尝试手动执行："
+        echo "export PATH=/root/.aios:\$PATH"
+        echo "source /root/.bashrc"
         return 1
     fi
+
+    echo "=== 诊断完成 ==="
+    echo "aios-cli 安装验证成功"
+    sleep 2
 
     # 清理已存在的屏幕会话
     echo "检查并清理现有的 '$screen_name' 屏幕会话..."

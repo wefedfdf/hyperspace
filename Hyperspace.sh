@@ -1,6 +1,7 @@
 #!/bin/bash
 
 SCRIPT_PATH="$HOME/Hyperspace.sh"
+LOG_FILE="/root/aios-cli.log"
 
 function main_menu() {
     while true; do
@@ -41,8 +42,8 @@ function import_private_key() {
     echo "请输入你的私钥（按 CTRL+D 结束）："
     cat > $tmpfile
     if [ -s $tmpfile ]; then
-        echo "正在导入私钥..."
-        aios-cli hive import-keys $tmpfile || echo "导入私钥失败，请检查私钥格式。"
+        echo "正在导入私钥..." | tee -a "$LOG_FILE"
+        aios-cli hive import-keys $tmpfile 2>>"$LOG_FILE" || echo "导入私钥失败，请检查私钥格式。" | tee -a "$LOG_FILE"
         sleep 5
     else
         echo "未输入私钥，导入取消。"
@@ -133,13 +134,13 @@ function deploy_hyperspace_node() {
         cat > "$tmpfile"
         
         if [ -s "$tmpfile" ]; then
-            echo "正在导入私钥..."
+            echo "正在导入私钥..." | tee -a "$LOG_FILE"
             # 清理私钥格式
             sed -i 's/[[:space:]]*$//' "$tmpfile"
             sed -i '/^$/d' "$tmpfile"
             
             # 尝试多种方式导入私钥
-            if ! aios-cli hive import-keys "$tmpfile" 2>/dev/null; then
+            if ! aios-cli hive import-keys "$tmpfile" 2>>"$LOG_FILE"; then
                 key_content=$(cat "$tmpfile")
                 if ! echo "$key_content" | aios-cli hive import-keys - 2>/dev/null; then
                     echo "私钥导入失败，请确保格式正确"

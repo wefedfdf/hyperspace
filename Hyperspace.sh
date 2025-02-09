@@ -12,7 +12,7 @@ function main_menu() {
         echo "================================================================"
         echo "退出脚本1，请按键盘 ctrl + C 退出即可"
         echo "请选择要执行的操作:"
-        echo "1. 部署hypers节点3"
+        echo "1. 部署hypers节点4"
         echo "2. 查看日志"
         echo "3. 查看积分"
         echo "4. 删除节点（停止节点）"
@@ -249,30 +249,38 @@ function deploy_single_node() {
 
     echo "守护进程已成功启动"
 
-    # 停止初始化的进程
-    echo "停止初始化进程..."
-    aios-cli kill
-    sleep 2
-
     # 导入私钥
     echo "正在导入私钥..."
+    # 检查私钥格式
+    if ! grep -q "^[a-zA-Z0-9+/]\{43\}=$" "$key_file"; then
+        echo "错误：私钥格式不正确"
+        echo "当前私钥内容："
+        cat "$key_file"
+        echo "私钥应该是44个字符的Base64字符串"
+        return 1
+    fi
+
+    # 尝试导入私钥
     echo "运行命令：aios-cli hive import-keys $key_file"
     if ! aios-cli hive import-keys "$key_file"; then
-        echo "错误：私钥导入失败"
-        echo "可能的原因："
-        echo "1. 私钥格式不正确"
-        echo "2. 私钥已被导入"
-        echo "3. aios-cli 守护进程未运行"
-        echo ""
-        echo "尝试重新启动 aios-cli..."
-        aios-cli start
+        echo "错误：私钥导入失败，尝试重新导入..."
+        # 不要停止守护进程，直接重试
         sleep 3
-        echo "重新尝试导入私钥..."
         if ! aios-cli hive import-keys "$key_file"; then
             echo "私钥导入再次失败"
+            echo "请检查私钥格式和守护进程状态"
             return 1
         fi
     fi
+
+    # 验证私钥是否成功导入
+    echo "验证私钥..."
+    if ! aios-cli hive whoami | grep -q "Account"; then
+        echo "错误：私钥导入后验证失败"
+        return 1
+    fi
+
+    echo "私钥导入成功！"
 
     # 添加模型
     local model="hf:TheBloke/phi-2-GGUF:phi-2.Q4_K_M.gguf"

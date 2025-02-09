@@ -12,7 +12,7 @@ function main_menu() {
         echo "================================================================"
         echo "退出脚本1，请按键盘 ctrl + C 退出即可"
         echo "请选择要执行的操作:"
-        echo "1. 部署hypers节点11"
+        echo "1. 部署hypers节点12"
         echo "2. 查看日志"
         echo "3. 查看积分"
         echo "4. 删除节点（停止节点）"
@@ -264,15 +264,47 @@ function deploy_single_node() {
     # 登录到 Hive
     echo "登录到 Hive..."
     echo "运行命令：AIOS_HOME=$work_dir aios-cli hive login"
-    if ! AIOS_HOME="$work_dir" aios-cli hive login 2>&1; then
-        echo "错误：Hive 登录失败"
-        echo "尝试检查连接状态..."
-        AIOS_HOME="$work_dir" aios-cli status
-        echo "尝试检查账户状态..."
-        AIOS_HOME="$work_dir" aios-cli hive whoami
+
+    # 尝试登录，最多重试3次
+    max_retries=3
+    retry_count=0
+    while [ $retry_count -lt $max_retries ]; do
+        if AIOS_HOME="$work_dir" aios-cli hive login 2>&1; then
+            echo "登录成功！"
+            break
+        else
+            retry_count=$((retry_count + 1))
+            if [ $retry_count -lt $max_retries ]; then
+                echo "登录失败 (尝试 $retry_count/$max_retries)"
+                echo "可能原因："
+                echo "1. Hive 服务暂时不可用 (503 错误)"
+                echo "2. 网络连接问题"
+                echo "3. 服务器维护中"
+                echo "等待 30 秒后重试..."
+                sleep 30
+                
+                # 重启守护进程
+                echo "重启守护进程..."
+                AIOS_HOME="$work_dir" aios-cli kill
+                sleep 2
+                AIOS_HOME="$work_dir" aios-cli start
+                sleep 5
+            else
+                echo "错误：登录失败，已重试 $max_retries 次"
+                echo "建议："
+                echo "1. 检查 Hive 服务状态"
+                echo "2. 等待几分钟后重试"
+                echo "3. 检查网络连接"
+                return 1
+            fi
+        fi
+    done
+
+    # 验证登录状态
+    if ! AIOS_HOME="$work_dir" aios-cli hive whoami 2>/dev/null | grep -q "Public"; then
+        echo "错误：登录状态验证失败"
         return 1
     fi
-    sleep 2
 
     # 选择等级
     echo "请为节点 $node_num 选择等级（1-5）："

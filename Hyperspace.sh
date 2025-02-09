@@ -225,32 +225,67 @@ function deploy_single_node() {
 
     # 导入私钥
     echo "正在导入私钥..."
-    # 检查私钥文件格式
+
+    # 1. 检查私钥文件是否存在
+    if [ ! -f "$key_file" ]; then
+        echo "错误1：私钥文件不存在 (Line 192)"
+        echo "文件路径: $key_file"
+        return 1
+    fi
+
+    # 2. 检查私钥文件权限
+    if [ ! -r "$key_file" ]; then
+        echo "错误2：私钥文件无法读取，请检查文件权限 (Line 198)"
+        ls -l "$key_file"
+        return 1
+    fi
+
+    # 3. 检查私钥格式
     if ! grep -q "^[a-zA-Z0-9+/]\{43\}=$" "$key_file"; then
-        echo "错误：私钥格式不正确 (Line 192)"
+        echo "错误3：私钥格式不正确 (Line 204)"
         echo "私钥应该是44个字符的Base64字符串"
         echo "当前私钥内容："
         cat "$key_file"
+        echo "当前私钥长度：$(wc -c < "$key_file") 字符"
         return 1
     fi
 
-    # 尝试导入私钥
-    echo "执行导入命令：aios-cli hive import-keys $key_file"
-    if ! aios-cli hive import-keys "$key_file" 2>&1; then
-        echo "错误：私钥导入失败 (Line 200)"
-        echo "请检查私钥格式是否正确"
+    # 4. 检查aios-cli是否正常运行
+    if ! aios-cli --version &>/dev/null; then
+        echo "错误4：aios-cli 命令无法执行 (Line 213)"
+        echo "PATH环境变量："
+        echo "$PATH"
+        echo "aios-cli位置："
+        which aios-cli 2>&1 || echo "找不到 aios-cli"
         return 1
     fi
-    sleep 2
+
+    # 5. 尝试导入私钥
+    echo "执行导入命令：aios-cli hive import-keys $key_file"
+    if ! OUTPUT=$(aios-cli hive import-keys "$key_file" 2>&1); then
+        echo "错误5：私钥导入失败 (Line 223)"
+        echo "命令输出："
+        echo "$OUTPUT"
+        echo "可能的原因："
+        echo "- 私钥格式不正确"
+        echo "- 私钥已经被导入"
+        echo "- aios-cli服务未正常运行"
+        echo "- 网络连接问题"
+        return 1
+    fi
 
     # 验证私钥是否成功导入
     echo "验证私钥..."
-    if ! aios-cli hive whoami 2>&1; then
-        echo "错误：私钥导入后验证失败 (Line 209)"
+    if ! WHOAMI_OUTPUT=$(aios-cli hive whoami 2>&1); then
+        echo "错误6：私钥导入后验证失败 (Line 236)"
         echo "whoami 命令输出："
-        aios-cli hive whoami 2>&1
+        echo "$WHOAMI_OUTPUT"
         return 1
     fi
+
+    echo "私钥导入成功！"
+    echo "账户信息："
+    echo "$WHOAMI_OUTPUT"
 
     # 添加模型
     local model="hf:TheBloke/phi-2-GGUF:phi-2.Q4_K_M.gguf"

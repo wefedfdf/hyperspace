@@ -119,6 +119,13 @@ function deploy_hyperspace_node() {
         sleep 15
     done
 
+    # 确保守护进程在导入私钥和添加模型之前运行
+    if ! aios-cli status &>/dev/null; then
+        echo "守护进程未运行，无法继续操作"
+        read -n 1 -s -r -p "按任意键返回主菜单..."
+        return
+    fi
+
     # 多私钥导入逻辑
     while true; do
         echo "请输入私钥（按 CTRL+D 结束）："

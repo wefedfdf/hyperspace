@@ -43,10 +43,22 @@ function import_private_key() {
     cat > $tmpfile
     if [ -s $tmpfile ]; then
         echo "正在导入私钥..." | tee -a "$LOG_FILE"
-        aios-cli hive import-keys $tmpfile 2>>"$LOG_FILE" || echo "导入私钥失败，请检查私钥格式。" | tee -a "$LOG_FILE"
+        
+        # 捕获命令输出
+        import_output=$(aios-cli hive import-keys $tmpfile 2>&1)
+        import_status=$?
+        
+        # 检查命令的退出状态
+        if [ $import_status -ne 0 ]; then
+            echo "导入私钥失败，错误码: $import_status" | tee -a "$LOG_FILE"
+            echo "错误详情: $import_output" | tee -a "$LOG_FILE"
+            echo "请检查私钥格式或联系支持。" | tee -a "$LOG_FILE"
+        else
+            echo "私钥导入成功！" | tee -a "$LOG_FILE"
+        fi
         sleep 5
     else
-        echo "未输入私钥，导入取消。"
+        echo "未输入私钥，导入取消。" | tee -a "$LOG_FILE"
     fi
     rm $tmpfile
     read -n 1 -s -r -p "按任意键返回主菜单..."
@@ -134,7 +146,7 @@ function deploy_hyperspace_node() {
         cat > "$tmpfile"
         
         if [ -s "$tmpfile" ]; then
-            echo "正在导入私钥..."
+            echo "正在导入私钥..." | tee -a "$LOG_FILE"
             # 清理私钥格式
             sed -i 's/[[:space:]]*$//' "$tmpfile"
             sed -i '/^$/d' "$tmpfile"

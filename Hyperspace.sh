@@ -12,7 +12,7 @@ function main_menu() {
         echo "================================================================"
         echo "退出脚本1，请按键盘 ctrl + C 退出即可"
         echo "请选择要执行的操作:"
-        echo "1. 部署hypers节点4"
+        echo "1. 部署hypers节点5"
         echo "2. 查看日志"
         echo "3. 查看积分"
         echo "4. 删除节点（停止节点）"
@@ -73,15 +73,6 @@ function add_new_key() {
     if [ $? -eq 0 ]; then
         echo "私钥已保存到: $key_file"
         
-        # 检查私钥格式
-        if ! grep -q "^[a-zA-Z0-9+/]\{43\}=$" "$key_file"; then
-            echo "错误：私钥格式不正确 (Line 228)"
-            echo "私钥应该是44个字符的Base64字符串"
-            rm "$key_file"
-            read -n 1 -s -r -p "按任意键继续..."
-            return 1
-        fi
-
         # 尝试导入私钥
         if ! aios-cli hive import-keys "$key_file" 2>&1 | tee /tmp/import_error.log; then
             echo "错误：私钥导入失败 (Line 237)"
@@ -251,24 +242,18 @@ function deploy_single_node() {
 
     # 导入私钥
     echo "正在导入私钥..."
-    # 检查私钥格式
-    if ! grep -q "^[a-zA-Z0-9+/]\{43\}=$" "$key_file"; then
-        echo "错误：私钥格式不正确"
-        echo "当前私钥内容："
-        cat "$key_file"
-        echo "私钥应该是44个字符的Base64字符串"
-        return 1
-    fi
-
-    # 尝试导入私钥
     echo "运行命令：aios-cli hive import-keys $key_file"
     if ! aios-cli hive import-keys "$key_file"; then
         echo "错误：私钥导入失败，尝试重新导入..."
-        # 不要停止守护进程，直接重试
+        # 显示当前私钥内容以供检查
+        echo "当前私钥内容："
+        cat "$key_file"
+        
+        # 等待一下再重试
         sleep 3
+        echo "重新尝试导入..."
         if ! aios-cli hive import-keys "$key_file"; then
             echo "私钥导入再次失败"
-            echo "请检查私钥格式和守护进程状态"
             return 1
         fi
     fi

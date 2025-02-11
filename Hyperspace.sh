@@ -12,7 +12,7 @@ function main_menu() {
         echo "================================================================"
         echo "退出脚本1，请按键盘 ctrl + C 退出即可"
         echo "请选择要执行的操作:"
-        echo "1. 部署hypers节点积分4"
+        echo "1. 部署hypers节点22"
         echo "2. 查看日志"
         echo "3. 查看积分"
         echo "4. 删除节点（停止节点）"
@@ -25,7 +25,7 @@ function main_menu() {
         case $choice in
             1)  deploy_hyperspace_node ;;
             2)  view_logs ;; 
-            3)  check_score ;;
+            3)  view_points ;;
             4)  delete_node ;;
             5)  start_log_monitor ;;
             6)  manage_keys ;;
@@ -143,66 +143,6 @@ function cleanup_processes() {
     return 0
 }
 
-# 验证节点状态的函数
-function verify_node_status() {
-    local work_dir=$1
-    local timeout=$2
-    local start_time=$(date +%s)
-
-    while true; do
-        # 检查是否超时
-        local current_time=$(date +%s)
-        if [ $((current_time - start_time)) -gt $timeout ]; then
-            return 1
-        fi
-
-        # 检查守护进程
-        if ! AIOS_HOME="$work_dir" aios-cli status 2>/dev/null | grep -q "running"; then
-            sleep 2
-            continue
-        fi
-
-        # 检查初始化日志
-        if ! tail -n 50 "$work_dir/init.log" 2>/dev/null | grep -q "gRPC server listening"; then
-            sleep 2
-            continue
-        fi
-
-        # 验证成功
-        return 0
-    done
-}
-
-# 验证连接状态的函数
-function verify_connection() {
-    local work_dir=$1
-    local timeout=$2
-    local start_time=$(date +%s)
-
-    while true; do
-        # 检查是否超时
-        local current_time=$(date +%s)
-        if [ $((current_time - start_time)) -gt $timeout ]; then
-            return 1
-        fi
-
-        # 检查连接状态
-        if ! AIOS_HOME="$work_dir" aios-cli hive status 2>/dev/null | grep -q "connected"; then
-            sleep 2
-            continue
-        fi
-
-        # 检查心跳
-        if ! tail -n 20 "$work_dir/init.log" 2>/dev/null | grep -q "Ping sent successfully"; then
-            sleep 2
-            continue
-        fi
-
-        # 验证成功
-        return 0
-    done
-}
-
 # 部署hyperspace节点
 function deploy_hyperspace_node() {
     # 询问要部署的节点数量
@@ -228,6 +168,44 @@ function deploy_hyperspace_node() {
     done
 
     read -n 1 -s -r -p "按任意键返回主菜单..."
+}
+
+# 选择等级的函数
+function select_tier() {
+    local work_dir=$1
+    local node_num=$2
+    
+    # 确保守护进程在运行
+    if ! AIOS_HOME="$work_dir" aios-cli status | grep -q "running"; then
+        echo "启动守护进程..."
+        AIOS_HOME="$work_dir" aios-cli start > "$work_dir/init.log" 2>&1 &
+        sleep 5
+    fi
+
+    # 确保已登录
+    echo "确保登录状态..."
+    if ! AIOS_HOME="$work_dir" aios-cli hive login 2>&1; then
+        echo "错误：登录失败"
+        return 1
+    fi
+    
+    # 选择等级
+    local tier_selected=false
+    while ! $tier_selected; do
+        echo "请为节点 $node_num 选择等级（1-5）："
+        select tier in 1 2 3 4 5; do
+            if [[ "$tier" =~ ^[1-5]$ ]]; then
+                if AIOS_HOME="$work_dir" aios-cli hive select-tier "$tier" 2>&1 | grep -q "Successfully"; then
+                    tier_selected=true
+                    break
+                else
+                    echo "该等级不可用，请选择其他等级"
+                fi
+            else
+                echo "请选择有效的等级（1-5）"
+            fi
+        done
+    done
 }
 
 # 部署单个节点的函数
@@ -268,74 +246,43 @@ function deploy_single_node() {
     fi
     chmod 600 "$key_file"
 
-    # 启动守护进程并等待初始化
-    echo "启动守护进程并等待初始化..."
+    # 启动守护进程
+    echo "启动守护进程..."
     AIOS_HOME="$work_dir" aios-cli start > "$work_dir/init.log" 2>&1 &
-    if ! verify_node_status "$work_dir" 30; then
-        echo "错误：守护进程初始化失败"
+    sleep 5
+
+    # 检查守护进程状态
+    if ! AIOS_HOME="$work_dir" aios-cli status | grep -q "running"; then
+        echo "错误：守护进程启动失败"
         cat "$work_dir/init.log"
         return 1
     fi
-    echo "守护进程已初始化"
 
-    # 导入私钥并登录
-    echo "导入私钥..."
+    # 导入私钥
+    echo "正在导入私钥..."
     if ! AIOS_HOME="$work_dir" aios-cli hive import-keys "$key_file" 2>&1; then
         echo "错误：私钥导入失败"
+        cat "$key_file"
         return 1
     fi
 
+    # 登录到 Hive
     echo "登录到 Hive..."
     if ! AIOS_HOME="$work_dir" aios-cli hive login 2>&1; then
         echo "错误：登录失败"
         return 1
     fi
 
-    # 建立连接并等待就绪
-    echo "连接到 Hive..."
-    AIOS_HOME="$work_dir" aios-cli hive connect > "$work_dir/connect.log" 2>&1 &
-    if ! verify_connection "$work_dir" 30; then
-        echo "错误：连接失败或未就绪"
-        cat "$work_dir/connect.log"
+    # 选择等级
+    if ! select_tier "$work_dir" "$node_num"; then
+        echo "错误：无法设置节点等级"
         return 1
     fi
-    echo "连接已就绪"
 
-    # 选择等级（带重试）
-    local max_tier_attempts=15
-    local tier_attempt=0
-    
-    while [ $tier_attempt -lt $max_tier_attempts ]; do
-        echo "请为节点 $node_num 选择等级（1-5）："
-        select tier in 1 2 3 4 5; do
-            if [[ "$tier" =~ ^[1-5]$ ]]; then
-                local result=$(AIOS_HOME="$work_dir" aios-cli hive select-tier "$tier" 2>&1)
-                if echo "$result" | grep -q "Successfully"; then
-                    echo "成功设置等级 $tier"
-                    break 2
-                else
-                    echo "等级 $tier 暂时不可用，原因："
-                    echo "$result"
-                    if [ $tier_attempt -gt 5 ]; then
-                        echo "尝试重新初始化连接..."
-                        AIOS_HOME="$work_dir" aios-cli kill
-                        sleep 3
-                        AIOS_HOME="$work_dir" aios-cli start
-                        sleep 5
-                        AIOS_HOME="$work_dir" aios-cli hive login
-                        sleep 2
-                        AIOS_HOME="$work_dir" aios-cli hive connect
-                        sleep 5
-                    fi
-                    break
-                fi
-            fi
-        done
-        tier_attempt=$((tier_attempt + 1))
-    done
-
-    if [ $tier_attempt -eq $max_tier_attempts ]; then
-        echo "错误：无法设置等级，达到最大重试次数"
+    # 连接到 Hive
+    echo "连接到 Hive..."
+    if ! AIOS_HOME="$work_dir" aios-cli hive connect 2>&1; then
+        echo "错误：连接失败"
         return 1
     fi
 
@@ -344,117 +291,17 @@ function deploy_single_node() {
     screen -dmS "$screen_name"
     screen -S "$screen_name" -X stuff "AIOS_HOME=$work_dir aios-cli start --connect >> $work_dir/aios-cli.log 2>&1\n"
 
-    # 等待并验证连接
-    echo "等待连接建立..."
-    local check_count=0
-    while [ $check_count -lt 12 ]; do
-        if tail -n 20 "$work_dir/aios-cli.log" 2>/dev/null | grep -q "Ping sent successfully"; then
-            echo "节点已成功连接并开始发送心跳"
-            echo "=== 节点 $node_num 部署完成 ==="
-            return 0
-        fi
-        check_count=$((check_count + 1))
-        sleep 5
-    done
-
-    echo "警告：未检测到心跳信号，但节点已启动"
     echo "=== 节点 $node_num 部署完成 ==="
+    sleep 2
     return 0
 }
 
-# 查询积分的函数
-function check_score() {
-    clear  # 清屏以获得更好的显示效果
-    echo "================================================================"
-    echo "                        节点状态和积分查询                         "
-    echo "================================================================"
-    
-    # 查找所有节点目录
-    local node_dirs=(/root/.aios_node*)
-    if [ ${#node_dirs[@]} -eq 0 ]; then
-        echo "未找到任何节点"
-        echo "按任意键返回主菜单..."
-        read -n 1 -s
-        return 1
-    fi
-
-    # 遍历每个节点
-    for work_dir in "${node_dirs[@]}"; do
-        local node_num=$(echo "$work_dir" | grep -o '[0-9]*$')
-        echo
-        echo "节点 $node_num 状态检查"
-        echo "----------------------------------------------------------------"
-        
-        # 检查守护进程
-        echo -n "守护进程状态: "
-        if AIOS_HOME="$work_dir" aios-cli status 2>/dev/null | grep -q "running"; then
-            echo "运行中"
-        else
-            echo "未运行"
-            echo "尝试重启守护进程..."
-            AIOS_HOME="$work_dir" aios-cli start > /dev/null 2>&1 &
-            sleep 3
-        fi
-
-        # 检查登录状态和公钥
-        local whoami_output=$(AIOS_HOME="$work_dir" aios-cli hive whoami 2>&1)
-        echo -n "登录状态: "
-        if echo "$whoami_output" | grep -q "Public"; then
-            echo "已登录"
-            echo "公钥: $(echo "$whoami_output" | grep "Public" | awk '{print $2}')"
-        else
-            echo "未登录"
-            # 尝试重新登录
-            echo "尝试重新登录..."
-            AIOS_HOME="$work_dir" aios-cli hive login > /dev/null 2>&1
-        fi
-        
-        # 检查连接状态
-        echo -n "连接状态: "
-        if AIOS_HOME="$work_dir" aios-cli hive status 2>&1 | grep -q "connected"; then
-            echo "已连接"
-        else
-            echo "未连接"
-            # 尝试重新连接
-            echo "尝试重新连接..."
-            AIOS_HOME="$work_dir" aios-cli hive connect > /dev/null 2>&1 &
-            sleep 5  # 等待连接建立
-        fi
-        
-        # 查询积分
-        echo "积分信息:"
-        local points_output=$(AIOS_HOME="$work_dir" aios-cli hive points 2>&1)
-        if [[ "$points_output" != *"error"* ]]; then
-            echo "$points_output" | sed 's/^/  /'  # 缩进显示
-        else
-            echo "  积分查询失败，请确保节点已连接"
-        fi
-
-        # 检查心跳
-        if [ -f "$work_dir/aios-cli.log" ]; then
-            echo "心跳状态:"
-            if tail -n 20 "$work_dir/aios-cli.log" 2>/dev/null | grep -q "Ping sent successfully"; then
-                echo "  ✓ 正常"
-                echo "  最后心跳: $(tail -n 20 "$work_dir/aios-cli.log" | grep "Ping sent successfully" | tail -n 1 | cut -d']' -f1 | tr -d '[]')"
-                echo "  连接时长: $(tail -n 100 "$work_dir/aios-cli.log" | grep -m 1 "Successfully connected to Hive" | cut -d']' -f1 | tr -d '[]')"
-            else
-                echo "  ✗ 未检测到心跳"
-                # 如果没有心跳，尝试重新连接
-                echo "  尝试重新建立连接..."
-                AIOS_HOME="$work_dir" aios-cli kill > /dev/null 2>&1
-                sleep 2
-                AIOS_HOME="$work_dir" aios-cli start > /dev/null 2>&1 &
-                sleep 3
-                AIOS_HOME="$work_dir" aios-cli hive connect > /dev/null 2>&1 &
-            fi
-        fi
-
-        echo "----------------------------------------------------------------"
-    done
-
-    echo
-    echo "按任意键返回主菜单..."
-    read -n 1 -s
+# 查看积分
+function view_points() {
+    echo "正在查看积分..."
+    source /root/.bashrc
+    aios-cli hive points
+    sleep 5
 }
 
 # 删除节点（停止节点）

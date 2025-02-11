@@ -12,7 +12,7 @@ function main_menu() {
         echo "================================================================"
         echo "退出脚本1，请按键盘 ctrl + C 退出即可"
         echo "请选择要执行的操作:"
-        echo "1. 部署hypers节点24"
+        echo "1. 部署hypers节点25"
         echo "2. 查看日志"
         echo "3. 查看积分"
         echo "4. 查询所有节点积分"
@@ -155,11 +155,12 @@ function cleanup_processes() {
     echo "检查运行中的进程..."
     
     # 清理所有同名的screen会话
-    while screen -ls | grep -q "$screen_name"; do
-        echo "清理screen会话 $screen_name..."
-        screen -S "$screen_name" -X quit >/dev/null 2>&1
-        sleep 1
-    done
+    while read -r session_id _; do
+        if [[ "$session_id" == *"$screen_name"* ]]; then
+            echo "清理screen会话: $session_id"
+            screen -S "$session_id" -X quit >/dev/null 2>&1
+        fi
+    done < <(screen -ls | grep -E "^[[:space:]]*[0-9]+\.$screen_name\b" || true)
     
     # 停止守护进程
     if AIOS_HOME="$work_dir" aios-cli kill 2>/dev/null; then

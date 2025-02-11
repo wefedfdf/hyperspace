@@ -24,7 +24,7 @@ function main_menu() {
         echo "================================================================"
         echo "退出脚本1，请按键盘 ctrl + C 退出即可"
         echo "请选择要执行的操作:"
-        echo "1. 部署hypers节点27"
+        echo "1. 部署hypers节点28"
         echo "2. 查看日志"
         echo "3. 查看积分"
         echo "4. 删除节点（停止节点）"
@@ -138,27 +138,45 @@ function clean_path() {
     PATH=$(echo $PATH | tr ':' '\n' | awk '!seen[$0]++' | tr '\n' ':' | sed 's/:$//')
 }
 
-# 检查并清理进程的函数
+# 改进的清理进程函数
 function cleanup_processes() {
     local work_dir=$1
     local screen_name=$2
     echo "清理进程..."
     
+    # 先停止 aios-cli 进程
+    AIOS_HOME="$work_dir" aios-cli kill 2>/dev/null
+    sleep 2
+    
+    # 强制结束所有相关进程
+    pkill -9 -f "AIOS_HOME=$work_dir" 2>/dev/null
+    
     # 清理所有相关的 screen 会话
     for session in $(screen -ls | grep "$screen_name" | awk '{print $1}'); do
-        screen -S "$session" -X quit
+        screen -S "$session" -X quit 2>/dev/null
     done
     
-    # 停止 aios-cli 进程
-    if AIOS_HOME="$work_dir" aios-cli kill 2>/dev/null; then
-        echo "成功停止守护进程"
+    # 删除可能存在的锁文件
+    rm -f "$work_dir"/*.lock 2>/dev/null
+    rm -f "$work_dir"/.*.lock 2>/dev/null
+    
+    # 等待确保所有进程都已停止
+    sleep 3
+    
+    # 验证是否还有相关进程在运行
+    if pgrep -f "AIOS_HOME=$work_dir" > /dev/null; then
+        echo "警告：仍有进程未能清理，尝试强制清理..."
+        pkill -9 -f "AIOS_HOME=$work_dir"
+        sleep 2
     fi
     
-    # 强制结束残留进程
-    pkill -9 -f "AIOS_HOME=$work_dir aios-cli" 2>/dev/null
+    # 最后验证
+    if pgrep -f "AIOS_HOME=$work_dir" > /dev/null; then
+        echo "错误：无法完全清理进程"
+        return 1
+    fi
     
-    # 等待进程完全停止
-    sleep 3
+    echo "进程清理完成"
     return 0
 }
 
@@ -278,9 +296,25 @@ function deploy_single_node() {
         return 1
     fi
 
+    # 启动节点前先确保完全清理
+    if ! cleanup_processes "$work_dir" "$screen_name"; then
+        echo "错误：无法清理旧进程，部署失败"
+        return 1
+    fi
+
     # 启动节点
     echo "启动节点..."
     screen -dmS "$screen_name"
+    # 等待 screen 会话创建
+    sleep 2
+    
+    # 验证 screen 会话是否创建成功
+    if ! screen -ls | grep -q "$screen_name"; then
+        echo "错误：无法创建 screen 会话"
+        return 1
+    }
+    
+    # 启动节点进程
     screen -S "$screen_name" -X stuff "AIOS_HOME=$work_dir aios-cli start --connect >> $work_dir/aios-cli.log 2>&1\n"
 
     # 等待节点启动

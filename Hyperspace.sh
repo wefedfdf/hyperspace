@@ -12,7 +12,7 @@ function main_menu() {
         echo "================================================================"
         echo "退出脚本1，请按键盘 ctrl + C 退出即可"
         echo "请选择要执行的操作:"
-        echo "1. 部署hypers节点13"
+        echo "1. 部署hypers节点14"
         echo "2. 查看日志"
         echo "3. 查看积分"
         echo "4. 删除节点（停止节点）"
@@ -328,15 +328,45 @@ function deploy_single_node() {
     select tier in 1 2 3 4 5; do
         if [[ "$tier" =~ ^[1-5]$ ]]; then
             echo "运行命令：AIOS_HOME=$work_dir aios-cli hive select-tier $tier"
-            if ! AIOS_HOME="$work_dir" aios-cli hive select-tier "$tier" 2>&1; then
+            # 尝试选择等级
+            tier_output=$(AIOS_HOME="$work_dir" aios-cli hive select-tier "$tier" 2>&1)
+            if echo "$tier_output" | grep -q "This tier is disabled"; then
+                echo "错误：等级 $tier 当前不可用"
+                echo "原因：该等级需要更多的显存"
+                echo "建议：请选择较低的等级"
+                echo "可用等级："
+                # 从低到高尝试每个等级
+                for t in 1 2 3 4 5; do
+                    if AIOS_HOME="$work_dir" aios-cli hive select-tier "$t" 2>&1 | grep -q "Successfully"; then
+                        echo "- 等级 $t (可用)"
+                    else
+                        echo "- 等级 $t (不可用)"
+                    fi
+                done
+                continue
+            elif ! echo "$tier_output" | grep -q "Successfully"; then
                 echo "错误：等级选择失败"
+                echo "错误信息："
+                echo "$tier_output"
                 return 1
             fi
+
             # 验证选择的等级
             local selected_tier=$(AIOS_HOME="$work_dir" aios-cli hive whoami 2>&1 | grep "tier" | awk '{print $2}')
-            if [ "$selected_tier" != "$tier" ]; then
-                echo "警告：选择的等级 ($tier) 与实际等级 ($selected_tier) 不匹配"
+            if [ -z "$selected_tier" ]; then
+                echo "警告：无法获取当前等级信息"
                 echo "是否继续？(y/n)"
+                read -p "请选择: " continue_deploy
+                if [[ ! "$continue_deploy" =~ ^[Yy]$ ]]; then
+                    return 1
+                fi
+            elif [ "$selected_tier" != "$tier" ]; then
+                echo "警告：选择的等级 ($tier) 与实际等级 ($selected_tier) 不匹配"
+                echo "原因可能是："
+                echo "1. 系统自动降级到可用等级"
+                echo "2. 硬件资源不足"
+                echo "3. 服务器限制"
+                echo "是否继续使用当前等级？(y/n)"
                 read -p "请选择: " continue_deploy
                 if [[ ! "$continue_deploy" =~ ^[Yy]$ ]]; then
                     return 1

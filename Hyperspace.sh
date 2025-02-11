@@ -24,7 +24,7 @@ function main_menu() {
         echo "================================================================"
         echo "退出脚本1，请按键盘 ctrl + C 退出即可"
         echo "请选择要执行的操作:"
-        echo "1. 部署hypers节点26"
+        echo "1. 部署hypers节点27"
         echo "2. 查看日志"
         echo "3. 查看积分"
         echo "4. 删除节点（停止节点）"
@@ -286,15 +286,28 @@ function deploy_single_node() {
     # 等待节点启动
     echo "等待节点启动..."
     local start_time=$(date +%s)
-    local timeout=60  # 60秒超时
+    local timeout=180  # 增加到180秒超时
     local connected=false
 
     while [ $(($(date +%s) - start_time)) -lt $timeout ]; do
-        if tail -n 50 "$work_dir/aios-cli.log" 2>/dev/null | grep -q "Successfully allocated VRAM" || \
-           tail -n 50 "$work_dir/aios-cli.log" 2>/dev/null | grep -q "Received pong"; then
+        if tail -n 100 "$work_dir/aios-cli.log" 2>/dev/null | grep -q "Successfully allocated VRAM" || \
+           tail -n 100 "$work_dir/aios-cli.log" 2>/dev/null | grep -q "Received pong" || \
+           tail -n 100 "$work_dir/aios-cli.log" 2>/dev/null | grep -q "🙂👍" || \
+           tail -n 100 "$work_dir/aios-cli.log" 2>/dev/null | grep -q "NEW_ROUND_STARTED"; then
             connected=true
             break
         fi
+
+        # 检查是否有错误
+        if tail -n 50 "$work_dir/aios-cli.log" 2>/dev/null | grep -q "Error\|error\|Failed\|failed"; then
+            echo "检测到错误，尝试重新启动..."
+            cleanup_processes "$work_dir" "$screen_name"
+            sleep 5
+            screen -dmS "$screen_name"
+            screen -S "$screen_name" -X stuff "AIOS_HOME=$work_dir aios-cli start --connect >> $work_dir/aios-cli.log 2>&1\n"
+            sleep 5
+        fi
+
         sleep 5
         echo -n "."
     done
@@ -302,12 +315,22 @@ function deploy_single_node() {
 
     if $connected; then
         echo "节点 $node_num 启动成功！"
+        # 等待额外的10秒确保稳定
+        sleep 10
+        # 再次验证节点状态
+        if tail -n 100 "$work_dir/aios-cli.log" 2>/dev/null | grep -q "Error\|error\|Failed\|failed"; then
+            echo "节点启动后发现错误，部署失败"
+            cleanup_processes "$work_dir" "$screen_name"
+            return 1
+        fi
         # 记录节点信息
         echo "${node_num}|${work_dir}|${key_file}" >> "$NODES_INFO_FILE"
         echo "=== 节点 $node_num 部署完成 ==="
         return 0
     else
         echo "错误：节点启动超时"
+        echo "最后100行日志："
+        tail -n 100 "$work_dir/aios-cli.log"
         cleanup_processes "$work_dir" "$screen_name"
         return 1
     fi

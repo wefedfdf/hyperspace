@@ -12,7 +12,7 @@ function main_menu() {
         echo "================================================================"
         echo "退出脚本1，请按键盘 ctrl + C 退出即可"
         echo "请选择要执行的操作:"
-        echo "1. 部署hypers节点23"
+        echo "1. 部署hypers节点24"
         echo "2. 查看日志"
         echo "3. 查看积分"
         echo "4. 查询所有节点积分"
@@ -151,25 +151,32 @@ function clean_path() {
 # 检查并清理进程的函数
 function cleanup_processes() {
     local work_dir=$1
+    local screen_name="hyper_$(echo $work_dir | grep -o '[0-9]*$')"
     echo "检查运行中的进程..."
     
-    # 先尝试正常停止
+    # 清理所有同名的screen会话
+    while screen -ls | grep -q "$screen_name"; do
+        echo "清理screen会话 $screen_name..."
+        screen -S "$screen_name" -X quit >/dev/null 2>&1
+        sleep 1
+    done
+    
+    # 停止守护进程
     if AIOS_HOME="$work_dir" aios-cli kill 2>/dev/null; then
         echo "成功停止守护进程"
     fi
     
-    # 确保所有相关进程都被停止
-    if pgrep -f "AIOS_HOME=$work_dir aios-cli" > /dev/null; then
-        echo "强制停止残留进程..."
-        pkill -9 -f "AIOS_HOME=$work_dir aios-cli"
-    fi
-    
-    # 等待进程完全停止
+    # 强制结束所有相关进程
+    pkill -f "AIOS_HOME=$work_dir"
     sleep 3
     
-    # 验证是否还有进程在运行
-    if pgrep -f "AIOS_HOME=$work_dir aios-cli" > /dev/null; then
-        echo "错误：无法停止所有进程"
+    # 确保工作目录干净
+    rm -f "$work_dir"/*.sock >/dev/null 2>&1
+    rm -f "$work_dir"/*.pid >/dev/null 2>&1
+    
+    # 最后验证
+    if pgrep -f "AIOS_HOME=$work_dir" > /dev/null || screen -ls | grep -q "$screen_name"; then
+        echo "错误：无法完全清理进程和会话"
         return 1
     fi
     
@@ -256,8 +263,11 @@ function deploy_single_node() {
     # 清理 PATH
     clean_path
 
-    # 清理已有进程
-    cleanup_processes "$work_dir"
+    # 确保完全清理
+    if ! cleanup_processes "$work_dir"; then
+        echo "错误：无法清理现有进程，请手动检查"
+        return 1
+    fi
 
     # 获取私钥
     echo "请输入节点 $node_num 的私钥（按 CTRL+D 结束）："
@@ -273,32 +283,49 @@ function deploy_single_node() {
     # 先启动守护进程
     echo "启动守护进程..."
     screen -dmS "$screen_name"
+    if [ $? -ne 0 ]; then
+        echo "错误：无法创建screen会话"
+        return 1
+    fi
+    
     sleep 2
     screen -S "$screen_name" -X stuff "cd $work_dir && AIOS_HOME=$work_dir aios-cli start\n"
     sleep 5
 
-    # 检查守护进程是否成功启动
-    if ! AIOS_HOME="$work_dir" aios-cli status 2>/dev/null | grep -q "running"; then
-        echo "错误：守护进程启动失败"
-        screen -S "$screen_name" -X quit
-        return 1
-    fi
+    # 多次尝试检查守护进程
+    for i in {1..3}; do
+        if AIOS_HOME="$work_dir" aios-cli status 2>/dev/null | grep -q "running"; then
+            break
+        fi
+        echo "等待守护进程启动... (尝试 $i/3)"
+        sleep 5
+        if [ $i -eq 3 ]; then
+            echo "错误：守护进程启动失败"
+            cleanup_processes "$work_dir"
+            return 1
+        fi
+    done
 
     # 导入私钥
     echo "正在导入私钥..."
-    if ! AIOS_HOME="$work_dir" aios-cli hive import-keys "$private_key_file" 2>&1; then
-        echo "错误：私钥导入失败"
-        AIOS_HOME="$work_dir" aios-cli kill
-        screen -S "$screen_name" -X quit
-        return 1
-    fi
+    for i in {1..3}; do
+        if AIOS_HOME="$work_dir" aios-cli hive import-keys "$private_key_file" 2>&1; then
+            break
+        fi
+        echo "私钥导入失败，重试... (尝试 $i/3)"
+        sleep 3
+        if [ $i -eq 3 ]; then
+            echo "错误：私钥导入失败"
+            cleanup_processes "$work_dir"
+            return 1
+        fi
+    done
 
     # 登录到 Hive
     echo "登录到 Hive..."
     if ! AIOS_HOME="$work_dir" aios-cli hive login 2>&1; then
         echo "错误：登录失败"
-        AIOS_HOME="$work_dir" aios-cli kill
-        screen -S "$screen_name" -X quit
+        cleanup_processes "$work_dir"
         return 1
     fi
 
@@ -317,8 +344,7 @@ function deploy_single_node() {
         fi
         if [ $i -eq 12 ]; then
             echo -e "\n错误：连接超时"
-            AIOS_HOME="$work_dir" aios-cli kill
-            screen -S "$screen_name" -X quit
+            cleanup_processes "$work_dir"
             return 1
         fi
     done
@@ -331,9 +357,7 @@ function deploy_single_node() {
         echo "是否继续保留该节点？(y/n)"
         read -p "选择: " keep_node
         if [[ ! "$keep_node" =~ ^[Yy]$ ]]; then
-            AIOS_HOME="$work_dir" aios-cli kill
-            screen -S "$screen_name" -X quit
-            rm -rf "$work_dir"
+            cleanup_processes "$work_dir"
             return 1
         fi
     else

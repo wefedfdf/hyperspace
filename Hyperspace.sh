@@ -12,7 +12,7 @@ function main_menu() {
         echo "================================================================"
         echo "退出脚本1，请按键盘 ctrl + C 退出即可"
         echo "请选择要执行的操作:"
-        echo "1. 部署hypers节点22"
+        echo "1. 部署hypers节点-积分版本1"
         echo "2. 查看日志"
         echo "3. 查看积分"
         echo "4. 删除节点（停止节点）"
@@ -25,7 +25,7 @@ function main_menu() {
         case $choice in
             1)  deploy_hyperspace_node ;;
             2)  view_logs ;; 
-            3)  view_points ;;
+            3)  check_score ;;
             4)  delete_node ;;
             5)  start_log_monitor ;;
             6)  manage_keys ;;
@@ -296,12 +296,63 @@ function deploy_single_node() {
     return 0
 }
 
-# 查看积分
-function view_points() {
-    echo "正在查看积分..."
-    source /root/.bashrc
-    aios-cli hive points
-    sleep 5
+# 查询积分的函数
+function check_score() {
+    echo "=== 开始查询节点积分 ==="
+    
+    # 查找所有节点目录
+    local node_dirs=(/root/.aios_node*)
+    if [ ${#node_dirs[@]} -eq 0 ]; then
+        echo "未找到任何节点"
+        return 1
+    fi
+
+    # 遍历每个节点
+    for work_dir in "${node_dirs[@]}"; do
+        local node_num=$(echo "$work_dir" | grep -o '[0-9]*$')
+        echo "检查节点 $node_num 状态..."
+        
+        # 检查守护进程
+        if ! AIOS_HOME="$work_dir" aios-cli status 2>/dev/null | grep -q "running"; then
+            echo "节点 $node_num: 守护进程未运行"
+            continue
+        fi
+
+        # 检查登录状态
+        local whoami_output=$(AIOS_HOME="$work_dir" aios-cli hive whoami 2>&1)
+        if ! echo "$whoami_output" | grep -q "Public"; then
+            echo "节点 $node_num: 未登录或登录失败"
+            continue
+        fi
+
+        # 显示节点信息
+        echo "节点 $node_num 信息："
+        echo "公钥: $(echo "$whoami_output" | grep "Public" | awk '{print $2}')"
+        
+        # 查询积分
+        local score_output=$(AIOS_HOME="$work_dir" aios-cli hive score 2>&1)
+        if echo "$score_output" | grep -q "score"; then
+            echo "积分: $score_output"
+        else
+            echo "积分查询失败: $score_output"
+        fi
+
+        # 检查连接状态
+        if AIOS_HOME="$work_dir" aios-cli hive status 2>&1 | grep -q "connected"; then
+            echo "连接状态: 已连接"
+        else
+            echo "连接状态: 未连接"
+        fi
+
+        # 检查运行时间
+        if [ -f "$work_dir/aios-cli.log" ]; then
+            echo "运行时间: $(stat -c %y "$work_dir/aios-cli.log")"
+        fi
+
+        echo "----------------------------------------"
+    done
+
+    echo "=== 积分查询完成 ==="
 }
 
 # 删除节点（停止节点）

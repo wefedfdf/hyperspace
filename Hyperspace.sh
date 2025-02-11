@@ -12,7 +12,7 @@ function main_menu() {
         echo "================================================================"
         echo "退出脚本1，请按键盘 ctrl + C 退出即可"
         echo "请选择要执行的操作:"
-        echo "1. 部署hypers节点20"
+        echo "1. 部署hypers节点21"
         echo "2. 查看日志"
         echo "3. 查看积分"
         echo "4. 删除节点（停止节点）"
@@ -120,12 +120,27 @@ function cleanup_processes() {
     local work_dir=$1
     echo "检查运行中的进程..."
     
-    # 停止指定工作目录的进程
-    if pgrep -f "AIOS_HOME=$work_dir aios-cli" > /dev/null; then
-        echo "停止工作目录 $work_dir 的进程..."
-        pkill -f "AIOS_HOME=$work_dir aios-cli"
-        sleep 2
+    # 先尝试正常停止
+    if AIOS_HOME="$work_dir" aios-cli kill 2>/dev/null; then
+        echo "成功停止守护进程"
     fi
+    
+    # 确保所有相关进程都被停止
+    if pgrep -f "AIOS_HOME=$work_dir aios-cli" > /dev/null; then
+        echo "强制停止残留进程..."
+        pkill -9 -f "AIOS_HOME=$work_dir aios-cli"
+    fi
+    
+    # 等待进程完全停止
+    sleep 3
+    
+    # 验证是否还有进程在运行
+    if pgrep -f "AIOS_HOME=$work_dir aios-cli" > /dev/null; then
+        echo "错误：无法停止所有进程"
+        return 1
+    fi
+    
+    return 0
 }
 
 # 部署hyperspace节点
@@ -153,6 +168,34 @@ function deploy_hyperspace_node() {
     done
 
     read -n 1 -s -r -p "按任意键返回主菜单..."
+}
+
+# 选择等级的函数
+function select_tier() {
+    local work_dir=$1
+    local node_num=$2
+    
+    while true; do
+        echo "请为节点 $node_num 选择等级（1-5）："
+        select tier in 1 2 3 4 5; do
+            if [[ "$tier" =~ ^[1-5]$ ]]; then
+                local result=$(AIOS_HOME="$work_dir" aios-cli hive select-tier "$tier" 2>&1)
+                if echo "$result" | grep -q "Successfully"; then
+                    echo "成功设置等级 $tier"
+                    return 0
+                elif echo "$result" | grep -q "disabled"; then
+                    echo "等级 $tier 当前不可用，请选择其他等级"
+                    break
+                else
+                    echo "设置等级失败，错误信息："
+                    echo "$result"
+                    break
+                fi
+            else
+                echo "请选择有效的等级（1-5）"
+            fi
+        done
+    done
 }
 
 # 部署单个节点的函数
@@ -193,98 +236,11 @@ function deploy_single_node() {
     fi
     chmod 600 "$key_file"
 
-    # 初始化节点
-    echo "初始化节点..."
-    echo "运行命令：AIOS_HOME=$work_dir aios-cli start"
-    
-    # 尝试启动守护进程
-    local start_retries=0
-    local max_start_retries=3
-    
-    while [ $start_retries -lt $max_start_retries ]; do
-        AIOS_HOME="$work_dir" aios-cli start > "$work_dir/init.log" 2>&1 &
-        sleep 5
-
-        if AIOS_HOME="$work_dir" aios-cli status | grep -q "running"; then
-            echo "守护进程已启动"
-            break
-        fi
-
-        start_retries=$((start_retries + 1))
-        if [ $start_retries -lt $max_start_retries ]; then
-            echo "守护进程启动失败，重试 ($start_retries/$max_start_retries)"
-            cleanup_processes "$work_dir"
-            sleep 2
-        else
-            echo "错误：守护进程无法启动"
-            cat "$work_dir/init.log"
-            return 1
-        fi
-    done
-
-    # 导入私钥
-    echo "正在导入私钥..."
-    echo "运行命令：aios-cli hive import-keys $key_file"
-    local import_retries=0
-    local max_import_retries=3
-
-    while [ $import_retries -lt $max_import_retries ]; do
-        if AIOS_HOME="$work_dir" aios-cli hive import-keys "$key_file" 2>&1; then
-            echo "私钥导入成功"
-            break
-        fi
-        import_retries=$((import_retries + 1))
-        if [ $import_retries -lt $max_import_retries ]; then
-            echo "私钥导入失败，重试 ($import_retries/$max_import_retries)"
-            # 重启守护进程
-            cleanup_processes "$work_dir"
-            AIOS_HOME="$work_dir" aios-cli start
-            sleep 5
-        else
-            echo "错误：私钥导入失败"
-            echo "私钥内容："
-            cat "$key_file"
-            return 1
-        fi
-    done
-
-    # 登录到 Hive
-    echo "登录到 Hive..."
-    local login_retries=0
-    local max_login_retries=3
-
-    while [ $login_retries -lt $max_login_retries ]; do
-        if AIOS_HOME="$work_dir" aios-cli hive login 2>&1; then
-            echo "登录成功"
-            break
-        fi
-        login_retries=$((login_retries + 1))
-        if [ $login_retries -lt $max_login_retries ]; then
-            echo "登录失败，重试 ($login_retries/$max_login_retries)"
-            sleep 5
-        else
-            echo "错误：无法登录到 Hive"
-            return 1
-        fi
-    done
-
     # 选择等级
-    echo "请为节点 $node_num 选择等级（1-5）："
-    local tier_selected=false
-    while ! $tier_selected; do
-        select tier in 1 2 3 4 5; do
-            if [[ "$tier" =~ ^[1-5]$ ]]; then
-                if AIOS_HOME="$work_dir" aios-cli hive select-tier "$tier" 2>&1; then
-                    tier_selected=true
-                    break
-                else
-                    echo "该等级不可用，请选择其他等级"
-                fi
-            else
-                echo "请选择有效的等级（1-5）"
-            fi
-        done
-    done
+    if ! select_tier "$work_dir" "$node_num"; then
+        echo "错误：无法设置节点等级"
+        return 1
+    fi
 
     # 连接到 Hive
     echo "连接到 Hive..."
@@ -292,16 +248,46 @@ function deploy_single_node() {
     local max_connect_retries=3
 
     while [ $connect_retries -lt $max_connect_retries ]; do
+        # 确保守护进程干净启动
+        if ! cleanup_processes "$work_dir"; then
+            echo "错误：无法清理进程"
+            return 1
+        fi
+        
+        # 重新启动守护进程
+        echo "启动守护进程..."
+        AIOS_HOME="$work_dir" aios-cli start > "$work_dir/init.log" 2>&1 &
+        sleep 5
+        
+        # 检查守护进程状态
+        if ! AIOS_HOME="$work_dir" aios-cli status | grep -q "running"; then
+            echo "错误：守护进程未能启动"
+            cat "$work_dir/init.log"
+            continue
+        fi
+        
+        # 重新登录
+        echo "重新登录..."
+        if ! AIOS_HOME="$work_dir" aios-cli hive login 2>&1; then
+            echo "错误：登录失败"
+            continue
+        fi
+        
+        # 重新设置等级
+        if ! select_tier "$work_dir" "$node_num"; then
+            echo "错误：无法重新设置等级"
+            continue
+        fi
+        
+        # 尝试连接
         if AIOS_HOME="$work_dir" aios-cli hive connect 2>&1; then
             echo "成功连接到 Hive"
             break
         fi
+        
         connect_retries=$((connect_retries + 1))
         if [ $connect_retries -lt $max_connect_retries ]; then
             echo "连接失败，重试 ($connect_retries/$max_connect_retries)"
-            # 重启守护进程
-            cleanup_processes "$work_dir"
-            AIOS_HOME="$work_dir" aios-cli start
             sleep 5
         else
             echo "错误：无法连接到 Hive"

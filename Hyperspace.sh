@@ -12,7 +12,7 @@ function main_menu() {
         echo "================================================================"
         echo "退出脚本1，请按键盘 ctrl + C 退出即可"
         echo "请选择要执行的操作:"
-        echo "1. 部署hypers节点15"
+        echo "1. 部署hypers节点16"
         echo "2. 查看日志"
         echo "3. 查看积分"
         echo "4. 删除节点（停止节点）"
@@ -110,6 +110,12 @@ function view_all_keys() {
     read -n 1 -s -r -p "按任意键继续..."
 }
 
+# 清理 PATH 环境变量的函数
+function clean_path() {
+    # 移除重复的 PATH 条目
+    PATH=$(echo $PATH | tr ':' '\n' | awk '!seen[$0]++' | tr '\n' ':' | sed 's/:$//')
+}
+
 # 部署hyperspace节点
 function deploy_hyperspace_node() {
     # 询问要部署的节点数量
@@ -142,107 +148,36 @@ function deploy_single_node() {
     local node_num=$1
     local screen_name="hyper_${node_num}"
     local work_dir="/root/.aios_node${node_num}"
-    local port=$((50051 + node_num - 1))  # 为每个节点分配不同端口
     
     # 创建并设置工作目录
     mkdir -p "$work_dir"
     export AIOS_HOME="$work_dir"
-    
-    # 执行安装命令
-    echo "正在执行安装命令：curl https://download.hyper.space/api/install | bash"
-    if ! curl -s https://download.hyper.space/api/install | bash; then
-        echo "安装失败，请检查网络连接或重试"
-        return 1
+
+    # 清理 PATH
+    clean_path
+
+    # 检查是否有其他实例在运行
+    if pgrep -f "aios-cli start" > /dev/null; then
+        echo "检测到其他 aios-cli 实例正在运行"
+        echo "正在停止所有实例..."
+        pkill -f "aios-cli"
+        sleep 5
     fi
 
-    # 等待安装完成并刷新环境变量
-    sleep 5
-    
-    echo "=== 诊断信息 ==="
-    echo "1. 检查 aios-cli 文件"
-    ls -l /root/.aios/aios-cli || echo "文件不存在"
-    
-    echo "2. 检查文件权限"
-    stat /root/.aios/aios-cli 2>/dev/null || echo "无法获取文件状态"
-    
-    echo "3. 当前 PATH 环境变量"
-    echo "$PATH"
-    
-    echo "4. 尝试直接执行 aios-cli"
-    /root/.aios/aios-cli --help || echo "直接执行失败"
-    
-    echo "5. 检查可执行权限"
-    if [ ! -x "/root/.aios/aios-cli" ]; then
-        echo "添加执行权限..."
-        chmod +x /root/.aios/aios-cli
-    fi
-
-    # 更新 PATH
-    export PATH="/root/.aios:$PATH"
-    source /root/.bashrc
-
-    echo "6. 验证 aios-cli 命令"
-    which aios-cli || echo "找不到 aios-cli 命令"
-    
-    echo "7. 再次尝试执行"
-    if ! aios-cli --help >/dev/null 2>&1; then
-        echo "错误：aios-cli 命令仍然无法执行"
-        echo "请尝试手动执行："
-        echo "export PATH=/root/.aios:\$PATH"
-        echo "source /root/.bashrc"
-        return 1
-    fi
-
-    echo "=== 诊断完成 ==="
-    echo "aios-cli 安装验证成功"
-    sleep 2
-
-    # 清理已存在的屏幕会话
-    echo "检查并清理现有的 '$screen_name' 屏幕会话..."
-    screen -ls | grep "$screen_name" &>/dev/null && {
-        echo "找到现有的 '$screen_name' 屏幕会话，正在停止并删除..."
-        screen -S "$screen_name" -X quit
-        sleep 2
-    }
-
-    # 创建新的屏幕会话
-    echo "创建一个名为 '$screen_name' 的屏幕会话..."
-    screen -dmS "$screen_name"
-    sleep 2
-
-    # 创建私钥目录
-    mkdir -p "$HOME/.hyperspace/keys"
-    local key_file="$HOME/.hyperspace/keys/node${node_num}_$(date +%s).pem"
-
-    # 获取私钥
-    echo "请输入节点 $node_num 的私钥（按 CTRL+D 结束）："
-    if ! cat > "$key_file"; then
-        echo "错误：私钥保存失败"
-        rm -f "$key_file"
-        return 1
-    fi
-
-    # 确保私钥文件不为空
-    if [ ! -s "$key_file" ]; then
-        echo "错误：私钥文件为空"
-        rm -f "$key_file"
-        return 1
-    fi
-
-    # 初始化节点时指定端口
+    # 初始化节点
     echo "初始化节点..."
-    echo "运行命令：AIOS_HOME=$work_dir aios-cli start --port $port"
-    AIOS_HOME="$work_dir" aios-cli start --port $port > "$work_dir/init.log" 2>&1 &
+    echo "运行命令：AIOS_HOME=$work_dir aios-cli start"
+    AIOS_HOME="$work_dir" aios-cli start > "$work_dir/init.log" 2>&1 &
     sleep 5
 
-    # 检查守护进程是否在指定端口运行
-    if ! netstat -tuln | grep -q ":$port "; then
-        echo "错误：守护进程未在端口 $port 上运行"
+    # 检查守护进程是否在运行
+    if ! AIOS_HOME="$work_dir" aios-cli status | grep -q "running"; then
+        echo "错误：守护进程启动失败"
         cat "$work_dir/init.log"
         return 1
     fi
 
-    echo "守护进程已在端口 $port 上启动"
+    echo "守护进程已启动"
 
     # 导入私钥
     echo "正在导入私钥..."
@@ -271,7 +206,7 @@ function deploy_single_node() {
         return 1
     fi
 
-    # 选择等级（简化版本，不检查等级）
+    # 选择等级（简化版本）
     echo "请为节点 $node_num 选择等级（1-5）："
     select tier in 1 2 3 4 5; do
         if [[ "$tier" =~ ^[1-5]$ ]]; then
@@ -302,7 +237,7 @@ function deploy_single_node() {
             # 重启守护进程
             AIOS_HOME="$work_dir" aios-cli kill
             sleep 2
-            AIOS_HOME="$work_dir" aios-cli start --port $port
+            AIOS_HOME="$work_dir" aios-cli start
             sleep 5
         else
             echo "错误：连接失败，已达到最大重试次数"
@@ -312,7 +247,7 @@ function deploy_single_node() {
 
     # 在屏幕会话中启动节点
     echo "启动节点 $node_num..."
-    screen -S "$screen_name" -X stuff "AIOS_HOME=$work_dir aios-cli start --port $port --connect >> $work_dir/aios-cli.log 2>&1\n"
+    screen -S "$screen_name" -X stuff "AIOS_HOME=$work_dir aios-cli start --connect >> $work_dir/aios-cli.log 2>&1\n"
 
     echo "节点 $node_num 部署完成"
     sleep 2

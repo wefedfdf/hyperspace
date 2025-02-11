@@ -12,7 +12,7 @@ function main_menu() {
         echo "================================================================"
         echo "退出脚本1，请按键盘 ctrl + C 退出即可"
         echo "请选择要执行的操作:"
-        echo "1. 部署hypers节点19"
+        echo "1. 部署hypers节点20"
         echo "2. 查看日志"
         echo "3. 查看积分"
         echo "4. 删除节点（停止节点）"
@@ -112,8 +112,20 @@ function view_all_keys() {
 
 # 清理 PATH 环境变量的函数
 function clean_path() {
-    # 移除重复的 PATH 条目
     PATH=$(echo $PATH | tr ':' '\n' | awk '!seen[$0]++' | tr '\n' ':' | sed 's/:$//')
+}
+
+# 检查并清理进程的函数
+function cleanup_processes() {
+    local work_dir=$1
+    echo "检查运行中的进程..."
+    
+    # 停止指定工作目录的进程
+    if pgrep -f "AIOS_HOME=$work_dir aios-cli" > /dev/null; then
+        echo "停止工作目录 $work_dir 的进程..."
+        pkill -f "AIOS_HOME=$work_dir aios-cli"
+        sleep 2
+    fi
 }
 
 # 部署hyperspace节点
@@ -149,6 +161,8 @@ function deploy_single_node() {
     local screen_name="hyper_${node_num}"
     local work_dir="/root/.aios_node${node_num}"
     
+    echo "=== 开始部署节点 $node_num ==="
+    
     # 创建并设置工作目录
     mkdir -p "$work_dir"
     export AIOS_HOME="$work_dir"
@@ -156,13 +170,8 @@ function deploy_single_node() {
     # 清理 PATH
     clean_path
 
-    # 检查是否有其他实例在运行
-    if pgrep -f "aios-cli start" > /dev/null; then
-        echo "检测到其他 aios-cli 实例正在运行"
-        echo "正在停止所有实例..."
-        pkill -f "aios-cli"
-        sleep 5
-    fi
+    # 清理已有进程
+    cleanup_processes "$work_dir"
 
     # 创建私钥目录和文件
     mkdir -p "$HOME/.hyperspace/keys"
@@ -176,72 +185,136 @@ function deploy_single_node() {
         return 1
     fi
 
-    # 确保私钥文件不为空
+    # 确保私钥文件不为空且有正确的权限
     if [ ! -s "$key_file" ]; then
         echo "错误：私钥文件为空"
         rm -f "$key_file"
         return 1
     fi
+    chmod 600 "$key_file"
 
     # 初始化节点
     echo "初始化节点..."
     echo "运行命令：AIOS_HOME=$work_dir aios-cli start"
-    AIOS_HOME="$work_dir" aios-cli start > "$work_dir/init.log" 2>&1 &
-    sleep 5
+    
+    # 尝试启动守护进程
+    local start_retries=0
+    local max_start_retries=3
+    
+    while [ $start_retries -lt $max_start_retries ]; do
+        AIOS_HOME="$work_dir" aios-cli start > "$work_dir/init.log" 2>&1 &
+        sleep 5
 
-    # 检查守护进程是否在运行
-    if ! AIOS_HOME="$work_dir" aios-cli status | grep -q "running"; then
-        echo "错误：守护进程启动失败"
-        cat "$work_dir/init.log"
-        return 1
-    fi
+        if AIOS_HOME="$work_dir" aios-cli status | grep -q "running"; then
+            echo "守护进程已启动"
+            break
+        fi
 
-    echo "守护进程已启动"
+        start_retries=$((start_retries + 1))
+        if [ $start_retries -lt $max_start_retries ]; then
+            echo "守护进程启动失败，重试 ($start_retries/$max_start_retries)"
+            cleanup_processes "$work_dir"
+            sleep 2
+        else
+            echo "错误：守护进程无法启动"
+            cat "$work_dir/init.log"
+            return 1
+        fi
+    done
 
     # 导入私钥
     echo "正在导入私钥..."
     echo "运行命令：aios-cli hive import-keys $key_file"
-    if ! AIOS_HOME="$work_dir" aios-cli hive import-keys "$key_file"; then
-        echo "错误：私钥导入失败"
-        echo "私钥内容："
-        cat "$key_file"
-        return 1
-    fi
+    local import_retries=0
+    local max_import_retries=3
+
+    while [ $import_retries -lt $max_import_retries ]; do
+        if AIOS_HOME="$work_dir" aios-cli hive import-keys "$key_file" 2>&1; then
+            echo "私钥导入成功"
+            break
+        fi
+        import_retries=$((import_retries + 1))
+        if [ $import_retries -lt $max_import_retries ]; then
+            echo "私钥导入失败，重试 ($import_retries/$max_import_retries)"
+            # 重启守护进程
+            cleanup_processes "$work_dir"
+            AIOS_HOME="$work_dir" aios-cli start
+            sleep 5
+        else
+            echo "错误：私钥导入失败"
+            echo "私钥内容："
+            cat "$key_file"
+            return 1
+        fi
+    done
 
     # 登录到 Hive
     echo "登录到 Hive..."
-    if ! AIOS_HOME="$work_dir" aios-cli hive login; then
-        echo "错误：Hive 登录失败"
-        return 1
-    fi
+    local login_retries=0
+    local max_login_retries=3
+
+    while [ $login_retries -lt $max_login_retries ]; do
+        if AIOS_HOME="$work_dir" aios-cli hive login 2>&1; then
+            echo "登录成功"
+            break
+        fi
+        login_retries=$((login_retries + 1))
+        if [ $login_retries -lt $max_login_retries ]; then
+            echo "登录失败，重试 ($login_retries/$max_login_retries)"
+            sleep 5
+        else
+            echo "错误：无法登录到 Hive"
+            return 1
+        fi
+    done
 
     # 选择等级
     echo "请为节点 $node_num 选择等级（1-5）："
-    select tier in 1 2 3 4 5; do
-        if [[ "$tier" =~ ^[1-5]$ ]]; then
-            if AIOS_HOME="$work_dir" aios-cli hive select-tier "$tier"; then
-                break
+    local tier_selected=false
+    while ! $tier_selected; do
+        select tier in 1 2 3 4 5; do
+            if [[ "$tier" =~ ^[1-5]$ ]]; then
+                if AIOS_HOME="$work_dir" aios-cli hive select-tier "$tier" 2>&1; then
+                    tier_selected=true
+                    break
+                else
+                    echo "该等级不可用，请选择其他等级"
+                fi
             else
-                echo "该等级不可用，请选择其他等级"
+                echo "请选择有效的等级（1-5）"
             fi
-        else
-            echo "请选择有效的等级（1-5）"
-        fi
+        done
     done
 
     # 连接到 Hive
     echo "连接到 Hive..."
-    if ! AIOS_HOME="$work_dir" aios-cli hive connect; then
-        echo "错误：Hive 连接失败"
-        return 1
-    fi
+    local connect_retries=0
+    local max_connect_retries=3
+
+    while [ $connect_retries -lt $max_connect_retries ]; do
+        if AIOS_HOME="$work_dir" aios-cli hive connect 2>&1; then
+            echo "成功连接到 Hive"
+            break
+        fi
+        connect_retries=$((connect_retries + 1))
+        if [ $connect_retries -lt $max_connect_retries ]; then
+            echo "连接失败，重试 ($connect_retries/$max_connect_retries)"
+            # 重启守护进程
+            cleanup_processes "$work_dir"
+            AIOS_HOME="$work_dir" aios-cli start
+            sleep 5
+        else
+            echo "错误：无法连接到 Hive"
+            return 1
+        fi
+    done
 
     # 在屏幕会话中启动节点
     echo "启动节点 $node_num..."
     screen -dmS "$screen_name"
     screen -S "$screen_name" -X stuff "AIOS_HOME=$work_dir aios-cli start --connect >> $work_dir/aios-cli.log 2>&1\n"
 
-    echo "节点 $node_num 部署完成"
+    echo "=== 节点 $node_num 部署完成 ==="
     sleep 2
     return 0
 }

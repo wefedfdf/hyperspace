@@ -271,7 +271,7 @@ function deploy_single_node() {
     if ! verify_port "$port"; then
         echo "错误：端口 $port 已被占用"
         return 1
-    }
+    fi
     
     # 清理进程
     if ! cleanup_processes "$work_dir"; then

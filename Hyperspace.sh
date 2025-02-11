@@ -12,20 +12,22 @@ function main_menu() {
         echo "================================================================"
         echo "退出脚本1，请按键盘 ctrl + C 退出即可"
         echo "请选择要执行的操作:"
-        echo "1. 部署hypers节点22"
+        echo "1. 部署hypers节点222"
         echo "2. 查看日志"
         echo "3. 查看积分"
+        echo "3a. 批量查询积分"
         echo "4. 删除节点（停止节点）"
         echo "5. 启用日志监控"
         echo "6. 管理私钥"
         echo "7. 退出脚本"
         echo "================================================================"
-        read -p "请输入选择 (1/2/3/4/5/6/7): " choice
+        read -p "请输入选择 (1/2/3/3a/4/5/6/7): " choice
 
         case $choice in
             1)  deploy_hyperspace_node ;;
             2)  view_logs ;; 
             3)  view_points ;;
+            3a) batch_view_points ;;
             4)  delete_node ;;
             5)  start_log_monitor ;;
             6)  manage_keys ;;
@@ -298,10 +300,89 @@ function deploy_single_node() {
 
 # 查看积分
 function view_points() {
-    echo "正在查看积分..."
-    source /root/.bashrc
-    aios-cli hive points
-    sleep 5
+    clear
+    echo "正在查看当前节点积分..."
+    echo "================="
+    
+    # 添加错误处理
+    if ! source /root/.bashrc 2>/dev/null; then
+        echo "警告: 无法加载 .bashrc 文件"
+    fi
+    
+    # 添加超时控制
+    timeout 30s aios-cli hive points 2>&1 || {
+        echo "错误: 查询超时或失败"
+        read -n 1 -s -r -p "按任意键返回主菜单..."
+        return 1
+    }
+    
+    echo "================="
+    read -n 1 -s -r -p "按任意键返回主菜单..."
+}
+
+# 新增批量查询积分函数
+function batch_view_points() {
+    clear
+    echo "批量查询积分"
+    echo "================="
+
+    # 获取所有节点工作目录
+    local node_dirs=(/root/.aios_node*)
+    
+    if [ ${#node_dirs[@]} -eq 0 ]; then
+        echo "未找到任何节点目录"
+        read -n 1 -s -r -p "按任意键返回主菜单..."
+        return
+    }
+
+    echo "发现 ${#node_dirs[@]} 个节点，开始查询积分..."
+    echo "================="
+    
+    # 创建临时文件存储结果
+    local temp_file=$(mktemp)
+    
+    # 为每个节点查询积分
+    for dir in "${node_dirs[@]}"; do
+        local node_num=$(echo "$dir" | grep -o '[0-9]*$')
+        echo "正在查询节点 $node_num 的积分..."
+        
+        # 使用节点特定的环境运行查询
+        AIOS_HOME="$dir" aios-cli hive points 2>&1 | tee -a "$temp_file"
+        echo "----------------------------------------" >> "$temp_file"
+    done
+
+    # 显示结果
+    clear
+    echo "所有节点积分查询结果："
+    echo "================="
+    cat "$temp_file"
+    echo "================="
+    
+    # 计算总积分（如果可能的话）
+    local total_points=$(grep -o 'Points: [0-9]*' "$temp_file" | awk '{sum += $2} END {print sum}')
+    if [ ! -z "$total_points" ]; then
+        echo "总积分: $total_points"
+    fi
+    
+    # 清理临时文件
+    rm -f "$temp_file"
+    
+    # 提供导出选项
+    echo ""
+    read -p "是否要导出结果到文件？(y/n): " export_choice
+    if [[ "$export_choice" =~ ^[Yy]$ ]]; then
+        local export_file="$HOME/hyperspace_points_$(date +%Y%m%d_%H%M%S).txt"
+        {
+            echo "积分查询报告 - $(date)"
+            echo "================="
+            cat "$temp_file"
+            echo "================="
+            echo "总积分: $total_points"
+        } > "$export_file"
+        echo "结果已导出到: $export_file"
+    fi
+
+    read -n 1 -s -r -p "按任意键返回主菜单..."
 }
 
 # 删除节点（停止节点）

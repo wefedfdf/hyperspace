@@ -117,8 +117,19 @@ function add_new_key() {
 function view_all_keys() {
     echo "当前已导入的所有私钥："
     echo "======================="
-    aios-cli hive whoami
-    echo "======================="
+    
+    if [ -f "$NODES_INFO_FILE" ]; then
+        while IFS='|' read -r node_num work_dir key_file; do
+            if [ -d "$work_dir" ]; then
+                echo "节点 $node_num:"
+                AIOS_HOME="$work_dir" aios-cli hive whoami 2>/dev/null
+                echo "------------------------"
+            fi
+        done < "$NODES_INFO_FILE"
+    else
+        echo "未找到任何节点信息"
+    fi
+    
     read -n 1 -s -r -p "按任意键继续..."
 }
 
@@ -274,7 +285,7 @@ function deploy_single_node() {
     echo "正在导入私钥..."
     if ! AIOS_HOME="$work_dir" aios-cli hive import-keys "$key_file" 2>&1; then
         echo "错误：私钥导入失败"
-        cat "$key_file"
+        cleanup_processes "$work_dir"
         return 1
     fi
 
@@ -282,19 +293,14 @@ function deploy_single_node() {
     echo "登录到 Hive..."
     if ! AIOS_HOME="$work_dir" aios-cli hive login 2>&1; then
         echo "错误：登录失败"
+        cleanup_processes "$work_dir"
         return 1
     fi
 
-    # 选择等级
+    # 选择等级并连接
     if ! select_tier "$work_dir" "$node_num"; then
         echo "错误：无法设置节点等级"
-        return 1
-    fi
-
-    # 连接到 Hive
-    echo "连接到 Hive..."
-    if ! AIOS_HOME="$work_dir" aios-cli hive connect 2>&1; then
-        echo "错误：连接失败"
+        cleanup_processes "$work_dir"
         return 1
     fi
 
@@ -303,11 +309,10 @@ function deploy_single_node() {
     screen -dmS "$screen_name"
     screen -S "$screen_name" -X stuff "AIOS_HOME=$work_dir aios-cli start --connect >> $work_dir/aios-cli.log 2>&1\n"
 
-    # 在成功部署后记录节点信息
+    # 记录节点信息
     echo "${node_num}|${work_dir}|${key_file}" >> "$NODES_INFO_FILE"
 
     echo "=== 节点 $node_num 部署完成 ==="
-    sleep 2
     return 0
 }
 
@@ -320,17 +325,32 @@ function view_points() {
         echo "未找到已部署的节点信息"
         read -n 1 -s -r -p "按任意键返回主菜单..."
         return
-    }
+    fi
 
+    # 创建临时文件存储积分信息
+    local temp_file=$(mktemp)
+    
     # 读取并显示每个节点的积分
     while IFS='|' read -r node_num work_dir key_file; do
         if [ -d "$work_dir" ]; then
-            echo "节点 $node_num 的积分信息："
-            echo "------------------------"
-            AIOS_HOME="$work_dir" aios-cli hive points 2>&1
-            echo "------------------------"
+            echo "节点 $node_num 的积分信息：" | tee -a "$temp_file"
+            echo "------------------------" | tee -a "$temp_file"
+            if AIOS_HOME="$work_dir" aios-cli hive points 2>&1 | tee -a "$temp_file"; then
+                echo "查询成功"
+            else
+                echo "查询失败，可能需要重新启动节点" | tee -a "$temp_file"
+            fi
+            echo "------------------------" | tee -a "$temp_file"
         fi
     done < "$NODES_INFO_FILE"
+
+    # 显示汇总信息
+    echo -e "\n积分汇总："
+    echo "=================================="
+    grep -A 1 "Points:" "$temp_file" | grep -v "^--$"
+    
+    # 清理临时文件
+    rm -f "$temp_file"
 
     read -n 1 -s -r -p "按任意键返回主菜单..."
 }

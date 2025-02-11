@@ -12,7 +12,7 @@ function main_menu() {
         echo "================================================================"
         echo "退出脚本1，请按键盘 ctrl + C 退出即可"
         echo "请选择要执行的操作:"
-        echo "1. 部署hypers节点16"
+        echo "1. 部署hypers节点17"
         echo "2. 查看日志"
         echo "3. 查看积分"
         echo "4. 删除节点（停止节点）"
@@ -164,6 +164,25 @@ function deploy_single_node() {
         sleep 5
     fi
 
+    # 创建私钥目录和文件
+    mkdir -p "$HOME/.hyperspace/keys"
+    local key_file="$HOME/.hyperspace/keys/node${node_num}_$(date +%s).pem"
+
+    # 获取私钥
+    echo "请输入节点 $node_num 的私钥（按 CTRL+D 结束）："
+    if ! cat > "$key_file"; then
+        echo "错误：私钥保存失败"
+        rm -f "$key_file"
+        return 1
+    fi
+
+    # 确保私钥文件不为空
+    if [ ! -s "$key_file" ]; then
+        echo "错误：私钥文件为空"
+        rm -f "$key_file"
+        return 1
+    fi
+
     # 初始化节点
     echo "初始化节点..."
     echo "运行命令：AIOS_HOME=$work_dir aios-cli start"
@@ -181,8 +200,11 @@ function deploy_single_node() {
 
     # 导入私钥
     echo "正在导入私钥..."
+    echo "运行命令：aios-cli hive import-keys $key_file"
     if ! AIOS_HOME="$work_dir" aios-cli hive import-keys "$key_file"; then
         echo "错误：私钥导入失败"
+        echo "私钥内容："
+        cat "$key_file"
         return 1
     fi
 

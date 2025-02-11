@@ -361,6 +361,9 @@ function check_score() {
             echo "公钥: $(echo "$whoami_output" | grep "Public" | awk '{print $2}')"
         else
             echo "未登录"
+            # 尝试重新登录
+            echo "尝试重新登录..."
+            AIOS_HOME="$work_dir" aios-cli hive login > /dev/null 2>&1
         fi
         
         # 检查连接状态
@@ -372,25 +375,34 @@ function check_score() {
             # 尝试重新连接
             echo "尝试重新连接..."
             AIOS_HOME="$work_dir" aios-cli hive connect > /dev/null 2>&1 &
+            sleep 5  # 等待连接建立
         fi
         
         # 查询积分
         echo "积分信息:"
-        local score_output=$(AIOS_HOME="$work_dir" aios-cli hive score 2>&1)
-        if echo "$score_output" | grep -q "score"; then
-            echo "$score_output" | sed 's/^/  /'  # 缩进显示
+        local points_output=$(AIOS_HOME="$work_dir" aios-cli hive points 2>&1)
+        if [[ "$points_output" != *"error"* ]]; then
+            echo "$points_output" | sed 's/^/  /'  # 缩进显示
         else
-            echo "  积分查询失败: $score_output"
+            echo "  积分查询失败，请确保节点已连接"
         fi
 
-        # 检查日志
+        # 检查心跳
         if [ -f "$work_dir/aios-cli.log" ]; then
             echo "心跳状态:"
             if tail -n 20 "$work_dir/aios-cli.log" 2>/dev/null | grep -q "Ping sent successfully"; then
                 echo "  ✓ 正常"
                 echo "  最后心跳: $(tail -n 20 "$work_dir/aios-cli.log" | grep "Ping sent successfully" | tail -n 1 | cut -d']' -f1 | tr -d '[]')"
+                echo "  连接时长: $(tail -n 100 "$work_dir/aios-cli.log" | grep -m 1 "Successfully connected to Hive" | cut -d']' -f1 | tr -d '[]')"
             else
                 echo "  ✗ 未检测到心跳"
+                # 如果没有心跳，尝试重新连接
+                echo "  尝试重新建立连接..."
+                AIOS_HOME="$work_dir" aios-cli kill > /dev/null 2>&1
+                sleep 2
+                AIOS_HOME="$work_dir" aios-cli start > /dev/null 2>&1 &
+                sleep 3
+                AIOS_HOME="$work_dir" aios-cli hive connect > /dev/null 2>&1 &
             fi
         fi
 

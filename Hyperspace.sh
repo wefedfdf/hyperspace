@@ -12,7 +12,7 @@ function main_menu() {
         echo "================================================================"
         echo "退出脚本1，请按键盘 ctrl + C 退出即可"
         echo "请选择要执行的操作:"
-        echo "1. 部署hypers节点25"
+        echo "1. 部署hypers节点26"
         echo "2. 查看日志"
         echo "3. 查看积分"
         echo "4. 查询所有节点积分"
@@ -162,6 +162,17 @@ function cleanup_processes() {
         fi
     done < <(screen -ls | grep -E "^[[:space:]]*[0-9]+\.$screen_name\b" || true)
     
+    # 等待screen会话完全退出
+    echo "等待screen会话退出..."
+    for i in {1..6}; do  # 最多等待30秒
+        if ! screen -ls | grep -q "$screen_name"; then
+            break
+        fi
+        echo -n "."
+        sleep 5
+    done
+    echo
+    
     # 停止守护进程
     if AIOS_HOME="$work_dir" aios-cli kill 2>/dev/null; then
         echo "成功停止守护进程"
@@ -169,18 +180,34 @@ function cleanup_processes() {
     
     # 强制结束所有相关进程
     pkill -f "AIOS_HOME=$work_dir"
-    sleep 3
+    
+    # 等待进程完全退出
+    echo "等待进程退出..."
+    for i in {1..6}; do  # 最多等待30秒
+        if ! pgrep -f "AIOS_HOME=$work_dir" > /dev/null; then
+            break
+        fi
+        echo -n "."
+        sleep 5
+    done
+    echo
     
     # 确保工作目录干净
     rm -f "$work_dir"/*.sock >/dev/null 2>&1
     rm -f "$work_dir"/*.pid >/dev/null 2>&1
     
     # 最后验证
-    if pgrep -f "AIOS_HOME=$work_dir" > /dev/null || screen -ls | grep -q "$screen_name"; then
-        echo "错误：无法完全清理进程和会话"
+    if pgrep -f "AIOS_HOME=$work_dir" > /dev/null; then
+        echo "错误：仍有进程未能清理"
         return 1
     fi
     
+    if screen -ls | grep -q "$screen_name"; then
+        echo "错误：仍有screen会话未能清理"
+        return 1
+    fi
+    
+    echo "清理完成 ✅"
     return 0
 }
 

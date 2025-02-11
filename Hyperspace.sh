@@ -12,7 +12,7 @@ function main_menu() {
         echo "================================================================"
         echo "退出脚本1，请按键盘 ctrl + C 退出即可"
         echo "请选择要执行的操作:"
-        echo "1. 部署hypers节点2222"
+        echo "1. 部署hypers节点23"
         echo "2. 查看日志"
         echo "3. 查看积分"
         echo "4. 查询所有节点积分"
@@ -259,43 +259,37 @@ function deploy_single_node() {
     # 清理已有进程
     cleanup_processes "$work_dir"
 
-    # 创建私钥目录和文件
-    mkdir -p "$HOME/.hyperspace/keys"
-    local key_file="$HOME/.hyperspace/keys/node${node_num}_$(date +%s).pem"
-
     # 获取私钥
     echo "请输入节点 $node_num 的私钥（按 CTRL+D 结束）："
-    if ! cat > "$key_file"; then
-        echo "错误：私钥保存失败"
-        rm -f "$key_file"
+    private_key_file="$work_dir/private_key"
+    cat > "$private_key_file"
+    if [ ! -s "$private_key_file" ]; then
+        echo "错误：私钥为空"
+        rm -rf "$work_dir"
         return 1
     fi
+    chmod 600 "$private_key_file"
 
-    # 确保私钥文件不为空且有正确的权限
-    if [ ! -s "$key_file" ]; then
-        echo "错误：私钥文件为空"
-        rm -f "$key_file"
-        return 1
-    fi
-    chmod 600 "$key_file"
-
-    # 启动守护进程
+    # 先启动守护进程
     echo "启动守护进程..."
-    AIOS_HOME="$work_dir" aios-cli start > "$work_dir/init.log" 2>&1 &
+    screen -dmS "$screen_name"
+    sleep 2
+    screen -S "$screen_name" -X stuff "cd $work_dir && AIOS_HOME=$work_dir aios-cli start\n"
     sleep 5
 
-    # 检查守护进程状态
-    if ! AIOS_HOME="$work_dir" aios-cli status | grep -q "running"; then
+    # 检查守护进程是否成功启动
+    if ! AIOS_HOME="$work_dir" aios-cli status 2>/dev/null | grep -q "running"; then
         echo "错误：守护进程启动失败"
-        cat "$work_dir/init.log"
+        screen -S "$screen_name" -X quit
         return 1
     fi
 
     # 导入私钥
     echo "正在导入私钥..."
-    if ! AIOS_HOME="$work_dir" aios-cli hive import-keys "$key_file" 2>&1; then
+    if ! AIOS_HOME="$work_dir" aios-cli hive import-keys "$private_key_file" 2>&1; then
         echo "错误：私钥导入失败"
-        cat "$key_file"
+        AIOS_HOME="$work_dir" aios-cli kill
+        screen -S "$screen_name" -X quit
         return 1
     fi
 
@@ -303,29 +297,51 @@ function deploy_single_node() {
     echo "登录到 Hive..."
     if ! AIOS_HOME="$work_dir" aios-cli hive login 2>&1; then
         echo "错误：登录失败"
-        return 1
-    fi
-
-    # 选择等级
-    if ! select_tier "$work_dir" "$node_num"; then
-        echo "错误：无法设置节点等级"
+        AIOS_HOME="$work_dir" aios-cli kill
+        screen -S "$screen_name" -X quit
         return 1
     fi
 
     # 连接到 Hive
     echo "连接到 Hive..."
-    if ! AIOS_HOME="$work_dir" aios-cli hive connect 2>&1; then
-        echo "错误：连接失败"
-        return 1
+    screen -S "$screen_name" -X stuff "AIOS_HOME=$work_dir aios-cli hive connect\n"
+    
+    # 等待连接建立
+    echo "等待连接建立..."
+    for i in {1..12}; do
+        echo -n "."
+        sleep 5
+        if AIOS_HOME="$work_dir" aios-cli hive status 2>/dev/null | grep -q "connected"; then
+            echo -e "\n连接成功！"
+            break
+        fi
+        if [ $i -eq 12 ]; then
+            echo -e "\n错误：连接超时"
+            AIOS_HOME="$work_dir" aios-cli kill
+            screen -S "$screen_name" -X quit
+            return 1
+        fi
+    done
+
+    # 验证积分查询
+    echo "验证节点状态..."
+    sleep 5
+    if ! AIOS_HOME="$work_dir" aios-cli hive points 2>/dev/null | grep -q "[0-9]"; then
+        echo "警告：无法查询积分，节点可能未正常运行"
+        echo "是否继续保留该节点？(y/n)"
+        read -p "选择: " keep_node
+        if [[ ! "$keep_node" =~ ^[Yy]$ ]]; then
+            AIOS_HOME="$work_dir" aios-cli kill
+            screen -S "$screen_name" -X quit
+            rm -rf "$work_dir"
+            return 1
+        fi
+    else
+        echo "节点运行正常，当前积分："
+        AIOS_HOME="$work_dir" aios-cli hive points
     fi
 
-    # 在屏幕会话中启动节点
-    echo "启动节点 $node_num..."
-    screen -dmS "$screen_name"
-    screen -S "$screen_name" -X stuff "AIOS_HOME=$work_dir aios-cli start --connect >> $work_dir/aios-cli.log 2>&1\n"
-
     echo "=== 节点 $node_num 部署完成 ==="
-    sleep 2
     return 0
 }
 

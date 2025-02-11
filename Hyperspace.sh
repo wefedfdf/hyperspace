@@ -12,7 +12,7 @@ function main_menu() {
         echo "================================================================"
         echo "退出脚本1，请按键盘 ctrl + C 退出即可"
         echo "请选择要执行的操作:"
-        echo "1. 部署hypers节点22"
+        echo "1. 部署hypers节点1"
         echo "2. 查看日志"
         echo "3. 查看积分"
         echo "4. 查询所有节点积分"
@@ -417,66 +417,104 @@ function exit_script() {
 
 # 检查所有节点积分的函数
 function check_all_scores() {
-    echo "正在查询所有私钥的积分..."
-    # 遍历所有配置的私钥
-    for private_key in "${PRIVATE_KEYS[@]}"; do
-        score=$(curl -s -X POST "https://api.hyperspace.node/v1/score" \
-            -H "Content-Type: application/json" \
-            -d "{\"private_key\": \"$private_key\"}")
-        
-        # 获取该私钥对应的节点标识（可以是前几位）
-        node_id="${private_key:0:8}..."
-        echo "节点 $node_id 的当前积分: $score"
+    echo "正在查询所有节点的积分..."
+    
+    # 遍历所有节点目录
+    for node_dir in /root/.aios_node*; do
+        if [ -d "$node_dir" ]; then
+            node_num=$(echo "$node_dir" | grep -o '[0-9]*$')
+            echo "===== 节点 $node_num ====="
+            
+            # 使用该节点的环境查询积分
+            AIOS_HOME="$node_dir" aios-cli hive points
+            
+            echo "------------------------"
+        fi
     done
+    
+    read -n 1 -s -r -p "按任意键返回主菜单..."
 }
 
 # 检查所有节点状态的函数
 function check_nodes_status() {
     echo "正在检查所有节点状态..."
     
-    # 存储所有运行中进程的PID
-    declare -A running_pids
+    # 获取所有screen会话
+    screen_list=$(screen -ls)
     
-    # 获取所有运行中的节点进程
-    while read -r pid cmd; do
-        if [[ "$cmd" == *"hyperspace"* ]]; then
-            running_pids[$pid]=1
+    # 遍历所有节点目录
+    for node_dir in /root/.aios_node*; do
+        if [ -d "$node_dir" ]; then
+            node_num=$(echo "$node_dir" | grep -o '[0-9]*$')
+            screen_name="hyper_${node_num}"
+            
+            echo "===== 节点 $node_num ====="
+            
+            # 检查screen会话是否存在
+            if echo "$screen_list" | grep -q "$screen_name"; then
+                echo "Screen会话: 运行中 ✅"
+                
+                # 检查节点状态
+                if AIOS_HOME="$node_dir" aios-cli status 2>/dev/null | grep -q "running"; then
+                    echo "节点状态: 运行中 ✅"
+                    
+                    # 检查连接状态
+                    if AIOS_HOME="$node_dir" aios-cli hive status 2>/dev/null | grep -q "connected"; then
+                        echo "Hive连接: 已连接 ✅"
+                    else
+                        echo "Hive连接: 未连接 ❌"
+                    fi
+                else
+                    echo "节点状态: 未运行 ❌"
+                fi
+            else
+                echo "Screen会话: 未运行 ❌"
+            fi
+            
+            echo "------------------------"
         fi
-    done < <(ps aux | grep hyperspace | grep -v grep)
+    done
     
-    # 检查每个私钥对应的节点状态
-    for private_key in "${PRIVATE_KEYS[@]}"; do
-        node_id="${private_key:0:8}..."
+    read -n 1 -s -r -p "按任意键继续..."
+}
+
+# 节点监控函数
+function monitor_nodes() {
+    echo "启动节点监控（每5分钟检查一次，按Ctrl+C退出）..."
+    echo "监控日志将保存在 /root/nodes_monitor.log"
+    
+    while true; do
+        echo "=== 监控检查 $(date) ===" | tee -a /root/nodes_monitor.log
         
-        # 检查节点连接状态
-        connection_status=$(curl -s -X POST "https://api.hyperspace.node/v1/status" \
-            -H "Content-Type: application/json" \
-            -d "{\"private_key\": \"$private_key\"}")
-        
-        # 查找对应的进程
-        is_running=false
-        for pid in "${!running_pids[@]}"; do
-            if ps -p "$pid" -f | grep -q "$private_key"; then
-                is_running=true
-                break
+        # 遍历所有节点目录
+        for node_dir in /root/.aios_node*; do
+            if [ -d "$node_dir" ]; then
+                node_num=$(echo "$node_dir" | grep -o '[0-9]*$')
+                screen_name="hyper_${node_num}"
+                
+                echo "检查节点 $node_num..." | tee -a /root/nodes_monitor.log
+                
+                # 检查节点状态并记录
+                if ! screen -list | grep -q "$screen_name"; then
+                    echo "警告: 节点 $node_num 的screen会话不存在，尝试重启..." | tee -a /root/nodes_monitor.log
+                    
+                    # 重启节点
+                    screen -dmS "$screen_name"
+                    screen -S "$screen_name" -X stuff "AIOS_HOME=$node_dir aios-cli start --connect\n"
+                    
+                elif ! AIOS_HOME="$node_dir" aios-cli status 2>/dev/null | grep -q "running"; then
+                    echo "警告: 节点 $node_num 未运行，尝试重启..." | tee -a /root/nodes_monitor.log
+                    
+                    # 重启节点
+                    screen -S "$screen_name" -X stuff $'\003'
+                    sleep 2
+                    screen -S "$screen_name" -X stuff "AIOS_HOME=$node_dir aios-cli start --connect\n"
+                fi
             fi
         done
         
-        if [ "$is_running" = true ]; then
-            echo "节点 $node_id: 正在运行 ✅"
-            echo "连接状态: $connection_status"
-        else
-            echo "节点 $node_id: 未运行 ❌"
-        fi
-    done
-}
-
-# 添加定时检查功能
-function monitor_nodes() {
-    while true; do
-        check_nodes_status
-        echo "----------------------------"
-        sleep 300  # 每5分钟检查一次
+        echo "------------------------" | tee -a /root/nodes_monitor.log
+        sleep 300  # 等待5分钟
     done
 }
 

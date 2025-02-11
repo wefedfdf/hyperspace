@@ -24,7 +24,7 @@ function main_menu() {
         echo "================================================================"
         echo "退出脚本1，请按键盘 ctrl + C 退出即可"
         echo "请选择要执行的操作:"
-        echo "1. 部署hypers节点22"
+        echo "1. 部署hypers节点23"
         echo "2. 查看日志"
         echo "3. 查看积分"
         echo "4. 删除节点（停止节点）"
@@ -269,50 +269,80 @@ function deploy_single_node() {
     fi
     chmod 600 "$key_file"
 
-    # 启动守护进程
-    echo "启动守护进程..."
+    # 添加初始化和验证步骤
+    echo "初始化节点..."
     AIOS_HOME="$work_dir" aios-cli start > "$work_dir/init.log" 2>&1 &
     sleep 5
 
-    # 检查守护进程状态
-    if ! AIOS_HOME="$work_dir" aios-cli status | grep -q "running"; then
-        echo "错误：守护进程启动失败"
-        cat "$work_dir/init.log"
-        return 1
-    fi
-
     # 导入私钥
-    echo "正在导入私钥..."
+    echo "导入私钥..."
     if ! AIOS_HOME="$work_dir" aios-cli hive import-keys "$key_file" 2>&1; then
         echo "错误：私钥导入失败"
         cleanup_processes "$work_dir"
         return 1
     fi
 
-    # 登录到 Hive
-    echo "登录到 Hive..."
+    # 登录验证
+    echo "验证登录..."
     if ! AIOS_HOME="$work_dir" aios-cli hive login 2>&1; then
         echo "错误：登录失败"
         cleanup_processes "$work_dir"
         return 1
     fi
 
-    # 选择等级并连接
+    # 选择等级
     if ! select_tier "$work_dir" "$node_num"; then
         echo "错误：无法设置节点等级"
         cleanup_processes "$work_dir"
         return 1
     fi
 
-    # 在屏幕会话中启动节点
-    echo "启动节点 $node_num..."
-    screen -dmS "$screen_name"
-    screen -S "$screen_name" -X stuff "AIOS_HOME=$work_dir aios-cli start --connect >> $work_dir/aios-cli.log 2>&1\n"
+    # 启动节点并验证连接
+    local max_retries=3
+    local retry_count=0
+    local connected=false
+    
+    while [ $retry_count -lt $max_retries ] && ! $connected; do
+        echo "启动节点并验证连接 (尝试 $((retry_count + 1))/$max_retries)..."
+        
+        # 清理之前的进程
+        cleanup_processes "$work_dir"
+        
+        # 启动新的连接
+        screen -dmS "$screen_name"
+        screen -S "$screen_name" -X stuff "AIOS_HOME=$work_dir aios-cli start --connect >> $work_dir/aios-cli.log 2>&1\n"
+        
+        # 等待并验证连接
+        local check_count=0
+        while [ $check_count -lt 6 ]; do
+            sleep 10
+            if tail -n 50 "$work_dir/aios-cli.log" | grep -q "Received pong" && \
+               ! tail -n 50 "$work_dir/aios-cli.log" | grep -q "Failed to"; then
+                connected=true
+                echo "节点 $node_num 连接成功并正常运行！"
+                break
+            fi
+            ((check_count++))
+        done
+        
+        if ! $connected; then
+            ((retry_count++))
+            echo "连接验证失败，准备重试..."
+            cleanup_processes "$work_dir"
+            sleep 5
+        fi
+    done
+
+    if ! $connected; then
+        echo "错误：无法建立有效连接"
+        cleanup_processes "$work_dir"
+        return 1
+    fi
 
     # 记录节点信息
     echo "${node_num}|${work_dir}|${key_file}" >> "$NODES_INFO_FILE"
-
-    echo "=== 节点 $node_num 部署完成 ==="
+    
+    echo "=== 节点 $node_num 部署完成并正常运行 ==="
     return 0
 }
 
@@ -404,42 +434,41 @@ get_node_screens() {
     screen -ls | grep 'hyper_' | cut -d. -f1 | awk '{print $1}'
 }
 
-LAST_RESTART=$(date +%s)
-MIN_RESTART_INTERVAL=300
+check_node_status() {
+    local work_dir=$1
+    local log_file="$work_dir/aios-cli.log"
+    
+    # 检查最近的日志
+    if tail -n 50 "$log_file" 2>/dev/null | grep -q "Received pong"; then
+        # 检查最后一次 pong 时间
+        local last_pong=$(tail -n 50 "$log_file" | grep "Received pong" | tail -n 1 | cut -d'[' -f2 | cut -d']' -f1)
+        local last_pong_ts=$(date -d "$last_pong" +%s 2>/dev/null)
+        local current_time=$(date +%s)
+        
+        if [ $((current_time - last_pong_ts)) -lt 300 ]; then
+            return 0  # 节点正常
+        fi
+    fi
+    return 1  # 节点需要重启
+}
 
 while true; do
-    current_time=$(date +%s)
-    
-    # 遍历所有节点的 screen 会话
     for screen_name in $(get_node_screens); do
         node_num=$(echo "$screen_name" | cut -d'_' -f2)
-        LOG_FILE="/root/aios-cli_node${node_num}.log"
+        work_dir="/root/.aios_node${node_num}"
         
-        # 检测到以下几种情况，触发重启
-        if (tail -n 4 "$LOG_FILE" 2>/dev/null | grep -q "Last pong received.*Sending reconnect signal" || \
-            tail -n 4 "$LOG_FILE" 2>/dev/null | grep -q "Failed to authenticate" || \
-            tail -n 4 "$LOG_FILE" 2>/dev/null | grep -q "Failed to connect to Hive" || \
-            tail -n 4 "$LOG_FILE" 2>/dev/null | grep -q "Another instance is already running" || \
-            tail -n 4 "$LOG_FILE" 2>/dev/null | grep -q "\"message\": \"Internal server error\"" || \
-            tail -n 4 "$LOG_FILE" 2>/dev/null | grep -q "thread 'main' panicked at") && \
-           [ $((current_time - LAST_RESTART)) -gt $MIN_RESTART_INTERVAL ]; then
+        if ! check_node_status "$work_dir"; then
+            echo "$(date): 节点 $node_num 需要重启..." >> /root/monitor.log
             
-            echo "$(date): 节点 $node_num 检测到错误，正在重启..." >> /root/monitor.log
-            
-            # 先发送 Ctrl+C
-            screen -S "$screen_name" -X stuff $'\003'
+            cleanup_processes "$work_dir"
             sleep 5
             
-            # 执行 aios-cli kill
-            screen -S "$screen_name" -X stuff "aios-cli kill\n"
+            # 重新初始化和启动
+            AIOS_HOME="$work_dir" aios-cli start > "$work_dir/init.log" 2>&1 &
             sleep 5
             
-            echo "$(date): 清理节点 $node_num 的日志..." > "$LOG_FILE"
+            screen -S "$screen_name" -X stuff "AIOS_HOME=$work_dir aios-cli start --connect >> $work_dir/aios-cli.log 2>&1\n"
             
-            # 重新启动服务
-            screen -S "$screen_name" -X stuff "aios-cli start --connect >> $LOG_FILE 2>&1\n"
-            
-            LAST_RESTART=$current_time
             echo "$(date): 节点 $node_num 已重启" >> /root/monitor.log
         fi
     done

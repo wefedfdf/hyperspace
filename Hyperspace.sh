@@ -12,7 +12,7 @@ function main_menu() {
         echo "================================================================"
         echo "退出脚本1，请按键盘 ctrl + C 退出即可"
         echo "请选择要执行的操作:"
-        echo "1. 部署hypers节点222"
+        echo "1. 部署hypers节点2222"
         echo "2. 查看日志"
         echo "3. 查看积分"
         echo "4. 查询所有节点积分"
@@ -62,48 +62,75 @@ function manage_keys() {
     done
 }
 
-# 添加新私钥
+# 添加新私钥并部署节点
 function add_new_key() {
-    echo "请输入私钥描述（用于标识不同的私钥）："
-    read -p "描述: " key_description
+    # 获取下一个可用的节点编号
+    next_num=1
+    while [ -d "/root/.aios_node$next_num" ]; do
+        ((next_num++))
+    done
     
-    # 创建私钥目录（如果不存在）
-    mkdir -p "$HOME/.hyperspace/keys"
+    node_dir="/root/.aios_node$next_num"
+    screen_name="hyper_${next_num}"
     
-    # 生成唯一的文件名
-    key_file="$HOME/.hyperspace/keys/key_${key_description}_$(date +%s).pem"
+    echo "添加新节点 (编号: $next_num)"
+    echo "请输入私钥（按 CTRL+D 结束）："
     
-    echo "请输入私钥内容（按 CTRL+D 结束）："
-    cat > "$key_file"
+    # 创建节点目录
+    mkdir -p "$node_dir"
+    private_key_file="$node_dir/private_key"
     
-    if [ $? -eq 0 ]; then
-        echo "私钥已保存到: $key_file"
-        
-        # 尝试导入私钥
-        if ! aios-cli hive import-keys "$key_file" 2>&1 | tee /tmp/import_error.log; then
-            echo "错误：私钥导入失败 (Line 237)"
-            echo "导入错误信息："
-            cat /tmp/import_error.log
-            rm -f /tmp/import_error.log
-            rm "$key_file"
-            read -n 1 -s -r -p "按任意键继续..."
-            return 1
-        fi
-
-        # 验证私钥是否成功导入
-        if ! aios-cli hive whoami 2>/dev/null | grep -q "Account"; then
-            echo "错误：私钥导入后验证失败 (Line 247)"
-            rm "$key_file"
-            read -n 1 -s -r -p "按任意键继续..."
-            return 1
-        fi
-
-        echo "私钥导入成功！"
-    else
-        echo "错误：保存私钥时发生错误 (Line 254)"
-        rm "$key_file" 2>/dev/null
+    # 保存私钥
+    cat > "$private_key_file"
+    if [ ! -s "$private_key_file" ]; then
+        echo "错误：私钥为空"
+        rm -rf "$node_dir"
+        read -n 1 -s -r -p "按任意键继续..."
+        return 1
+    fi
+    chmod 600 "$private_key_file"
+    
+    # 导入私钥
+    echo "正在导入私钥..."
+    if ! AIOS_HOME="$node_dir" aios-cli hive import-keys "$private_key_file" 2>&1; then
+        echo "错误：私钥导入失败"
+        rm -rf "$node_dir"
+        read -n 1 -s -r -p "按任意键继续..."
+        return 1
     fi
     
+    # 验证私钥
+    if ! AIOS_HOME="$node_dir" aios-cli hive whoami 2>/dev/null | grep -q "Account"; then
+        echo "错误：私钥验证失败"
+        rm -rf "$node_dir"
+        read -n 1 -s -r -p "按任意键继续..."
+        return 1
+    fi
+    
+    # 启动节点
+    echo "正在启动节点..."
+    screen -dmS "$screen_name"
+    sleep 2
+    screen -S "$screen_name" -X stuff "cd $node_dir && AIOS_HOME=$node_dir aios-cli start --connect\n"
+    
+    # 等待节点启动
+    echo "等待节点启动..."
+    for i in {1..6}; do
+        echo -n "."
+        sleep 5
+        # 检查节点是否正常运行
+        if AIOS_HOME="$node_dir" aios-cli status 2>/dev/null | grep -q "running" && \
+           AIOS_HOME="$node_dir" aios-cli hive status 2>/dev/null | grep -q "connected" && \
+           AIOS_HOME="$node_dir" aios-cli hive points 2>/dev/null | grep -q "[0-9]"; then
+            echo -e "\n节点启动成功！"
+            echo "当前积分："
+            AIOS_HOME="$node_dir" aios-cli hive points
+            read -n 1 -s -r -p "按任意键继续..."
+            return 0
+        fi
+    done
+    
+    echo -e "\n警告：节点启动可能不完整，请检查状态"
     read -n 1 -s -r -p "按任意键继续..."
 }
 
@@ -417,21 +444,39 @@ function exit_script() {
 
 # 检查所有节点积分的函数
 function check_all_scores() {
-    echo "正在查询所有节点的积分..."
+    echo "正在查询所有节点积分..."
+    echo "----------------------------------------"
+    printf "%-4s %-15s %-10s %-10s\n" "节点" "状态" "连接" "积分"
+    echo "----------------------------------------"
     
     # 遍历所有节点目录
     for node_dir in /root/.aios_node*; do
         if [ -d "$node_dir" ]; then
             node_num=$(echo "$node_dir" | grep -o '[0-9]*$')
-            echo "===== 节点 $node_num ====="
+            screen_name="hyper_${node_num}"
             
-            # 使用该节点的环境查询积分
-            AIOS_HOME="$node_dir" aios-cli hive points
+            # 检查状态
+            if screen -list | grep -q "$screen_name" && \
+               AIOS_HOME="$node_dir" aios-cli status 2>/dev/null | grep -q "running"; then
+                status="运行中 ✅"
+            else
+                status="未运行 ❌"
+            fi
             
-            echo "------------------------"
+            # 检查连接
+            if AIOS_HOME="$node_dir" aios-cli hive status 2>/dev/null | grep -q "connected"; then
+                connection="已连接 ✅"
+            else
+                connection="未连接 ❌"
+            fi
+            
+            # 获取积分
+            points=$(AIOS_HOME="$node_dir" aios-cli hive points 2>/dev/null | grep -o '[0-9]*' || echo "N/A")
+            
+            printf "%-4s %-15s %-10s %-10s\n" "$node_num" "$status" "$connection" "$points"
         fi
     done
-    
+    echo "----------------------------------------"
     read -n 1 -s -r -p "按任意键返回主菜单..."
 }
 
@@ -483,7 +528,6 @@ function monitor_nodes() {
     echo "启动节点监控（每30秒检查一次，按Ctrl+C退出）..."
     echo "监控日志将保存在 /root/nodes_monitor.log"
     
-    # 为每个节点创建独立的重启计时器
     declare -A last_restarts
     MIN_RESTART_INTERVAL=300  # 最小重启间隔（5分钟）
     
@@ -491,38 +535,28 @@ function monitor_nodes() {
         current_time=$(date +%s)
         echo "=== 监控检查 $(date) ===" | tee -a /root/nodes_monitor.log
         
-        # 遍历所有节点目录
         for node_dir in /root/.aios_node*; do
             if [ -d "$node_dir" ]; then
                 node_num=$(echo "$node_dir" | grep -o '[0-9]*$')
                 screen_name="hyper_${node_num}"
-                LOG_FILE="$node_dir/aios-cli.log"  # 使用节点目录存放日志
                 
-                # 初始化该节点的重启时间
+                # 初始化重启时间
                 [[ -z "${last_restarts[$node_num]}" ]] && last_restarts[$node_num]=0
                 
-                echo "检查节点 $node_num..." | tee -a /root/nodes_monitor.log
-                
                 # 检查节点状态
-                node_status=$(AIOS_HOME="$node_dir" aios-cli status 2>/dev/null)
-                hive_status=$(AIOS_HOME="$node_dir" aios-cli hive status 2>/dev/null)
+                needs_restart=false
+                if ! screen -list | grep -q "$screen_name" || \
+                   ! AIOS_HOME="$node_dir" aios-cli status 2>/dev/null | grep -q "running" || \
+                   ! AIOS_HOME="$node_dir" aios-cli hive status 2>/dev/null | grep -q "connected" || \
+                   ! AIOS_HOME="$node_dir" aios-cli hive points 2>/dev/null | grep -q "[0-9]"; then
+                    needs_restart=true
+                fi
                 
-                # 检查各种错误情况
-                if (tail -n 10 "$LOG_FILE" 2>/dev/null | grep -q "Last pong received.*Sending reconnect signal" || \
-                    tail -n 10 "$LOG_FILE" 2>/dev/null | grep -q "Failed to authenticate" || \
-                    tail -n 10 "$LOG_FILE" 2>/dev/null | grep -q "Failed to connect to Hive" || \
-                    ! screen -list | grep -q "$screen_name" || \
-                    ! echo "$node_status" | grep -q "running" || \
-                    ! echo "$hive_status" | grep -q "connected") && \
-                    [ $((current_time - last_restarts[$node_num])) -gt $MIN_RESTART_INTERVAL ]; then
+                if $needs_restart && [ $((current_time - last_restarts[$node_num])) -gt $MIN_RESTART_INTERVAL ]; then
+                    echo "重启节点 $node_num..." | tee -a /root/nodes_monitor.log
                     
-                    echo "$(date): 节点 $node_num 需要重启..." | tee -a /root/nodes_monitor.log
-                    echo "状态: $node_status" | tee -a /root/nodes_monitor.log
-                    echo "Hive状态: $hive_status" | tee -a /root/nodes_monitor.log
-                    
-                    # 1. 停止现有进程
+                    # 停止旧进程
                     if screen -list | grep -q "$screen_name"; then
-                        echo "停止现有进程..." | tee -a /root/nodes_monitor.log
                         screen -S "$screen_name" -X stuff $'\003'
                         sleep 5
                         AIOS_HOME="$node_dir" aios-cli kill
@@ -530,32 +564,21 @@ function monitor_nodes() {
                         screen -S "$screen_name" -X quit
                     fi
                     
-                    # 2. 清理日志
-                    echo "$(date): 清理节点 $node_num 的日志..." | tee -a /root/nodes_monitor.log
-                    echo "=== 节点重启于 $(date) ===" > "$LOG_FILE"
-                    
-                    # 3. 重新创建screen会话并启动节点
-                    echo "重新启动节点..." | tee -a /root/nodes_monitor.log
+                    # 重启节点
                     screen -dmS "$screen_name"
                     sleep 2
-                    screen -S "$screen_name" -X stuff "cd $node_dir && AIOS_HOME=$node_dir aios-cli start --connect >> $LOG_FILE 2>&1\n"
+                    screen -S "$screen_name" -X stuff "cd $node_dir && AIOS_HOME=$node_dir aios-cli start --connect\n"
                     
                     last_restarts[$node_num]=$current_time
-                    echo "$(date): 节点 $node_num 重启完成" | tee -a /root/nodes_monitor.log
                 else
-                    # 检查是否正常运行
-                    if tail -n 5 "$LOG_FILE" 2>/dev/null | grep -q "Received pong"; then
-                        echo "节点 $node_num 运行正常 ✅" | tee -a /root/nodes_monitor.log
-                        # 显示积分信息
-                        points=$(AIOS_HOME="$node_dir" aios-cli hive points 2>/dev/null)
-                        echo "积分信息: $points" | tee -a /root/nodes_monitor.log
-                    fi
+                    points=$(AIOS_HOME="$node_dir" aios-cli hive points 2>/dev/null | grep -o '[0-9]*' || echo "N/A")
+                    echo "节点 $node_num 运行正常，积分: $points" | tee -a /root/nodes_monitor.log
                 fi
             fi
         done
         
         echo "------------------------" | tee -a /root/nodes_monitor.log
-        sleep 30  # 每30秒检查一次
+        sleep 30
     done
 }
 

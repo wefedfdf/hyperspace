@@ -15,21 +15,27 @@ function main_menu() {
         echo "1. 部署hypers节点22"
         echo "2. 查看日志"
         echo "3. 查看积分"
-        echo "4. 删除节点（停止节点）"
-        echo "5. 启用日志监控"
-        echo "6. 管理私钥"
-        echo "7. 退出脚本"
+        echo "4. 查询所有节点积分"
+        echo "5. 检查所有节点状态"
+        echo "6. 启动节点监控"
+        echo "7. 删除节点（停止节点）"
+        echo "8. 启用日志监控"
+        echo "9. 管理私钥"
+        echo "10. 退出脚本"
         echo "================================================================"
-        read -p "请输入选择 (1/2/3/4/5/6/7): " choice
+        read -p "请输入选择 (1/2/3/4/5/6/7/8/9/10): " choice
 
         case $choice in
             1)  deploy_hyperspace_node ;;
             2)  view_logs ;; 
             3)  view_points ;;
-            4)  delete_node ;;
-            5)  start_log_monitor ;;
-            6)  manage_keys ;;
-            7)  exit_script ;;
+            4)  check_all_scores ;;
+            5)  check_nodes_status ;;
+            6)  monitor_nodes ;;
+            7)  delete_node ;;
+            8)  start_log_monitor ;;
+            9)  manage_keys ;;
+            10) exit_script ;;
             *)  echo "无效选择，请重新输入！"; sleep 2 ;;
         esac
     done
@@ -407,6 +413,71 @@ function view_logs() {
 function exit_script() {
     echo "退出脚本..."
     exit 0
+}
+
+# 检查所有节点积分的函数
+function check_all_scores() {
+    echo "正在查询所有私钥的积分..."
+    # 遍历所有配置的私钥
+    for private_key in "${PRIVATE_KEYS[@]}"; do
+        score=$(curl -s -X POST "https://api.hyperspace.node/v1/score" \
+            -H "Content-Type: application/json" \
+            -d "{\"private_key\": \"$private_key\"}")
+        
+        # 获取该私钥对应的节点标识（可以是前几位）
+        node_id="${private_key:0:8}..."
+        echo "节点 $node_id 的当前积分: $score"
+    done
+}
+
+# 检查所有节点状态的函数
+function check_nodes_status() {
+    echo "正在检查所有节点状态..."
+    
+    # 存储所有运行中进程的PID
+    declare -A running_pids
+    
+    # 获取所有运行中的节点进程
+    while read -r pid cmd; do
+        if [[ "$cmd" == *"hyperspace"* ]]; then
+            running_pids[$pid]=1
+        fi
+    done < <(ps aux | grep hyperspace | grep -v grep)
+    
+    # 检查每个私钥对应的节点状态
+    for private_key in "${PRIVATE_KEYS[@]}"; do
+        node_id="${private_key:0:8}..."
+        
+        # 检查节点连接状态
+        connection_status=$(curl -s -X POST "https://api.hyperspace.node/v1/status" \
+            -H "Content-Type: application/json" \
+            -d "{\"private_key\": \"$private_key\"}")
+        
+        # 查找对应的进程
+        is_running=false
+        for pid in "${!running_pids[@]}"; do
+            if ps -p "$pid" -f | grep -q "$private_key"; then
+                is_running=true
+                break
+            fi
+        done
+        
+        if [ "$is_running" = true ]; then
+            echo "节点 $node_id: 正在运行 ✅"
+            echo "连接状态: $connection_status"
+        else
+            echo "节点 $node_id: 未运行 ❌"
+        fi
+    done
+}
+
+# 添加定时检查功能
+function monitor_nodes() {
+    while true; do
+        check_nodes_status
+        echo "----------------------------"
+        sleep 300  # 每5分钟检查一次
+    done
 }
 
 # 调用主菜单函数

@@ -12,7 +12,7 @@ function main_menu() {
         echo "================================================================"
         echo "退出脚本1，请按键盘 ctrl + C 退出即可"
         echo "请选择要执行的操作:"
-        echo "1. 部署hypers节点12"
+        echo "1. 部署hypers节点13"
         echo "2. 查看日志"
         echo "3. 查看积分"
         echo "4. 删除节点（停止节点）"
@@ -142,6 +142,7 @@ function deploy_single_node() {
     local node_num=$1
     local screen_name="hyper_${node_num}"
     local work_dir="/root/.aios_node${node_num}"  # 为每个节点创建独立的工作目录
+    local port=$((50051 + node_num - 1))  # 为每个节点分配不同端口
     
     # 创建并设置工作目录
     mkdir -p "$work_dir"
@@ -265,8 +266,8 @@ function deploy_single_node() {
     echo "登录到 Hive..."
     echo "运行命令：AIOS_HOME=$work_dir aios-cli hive login"
 
-    # 尝试登录，最多重试3次
-    max_retries=3
+    # 尝试登录，最多重试10次
+    max_retries=10
     retry_count=0
     while [ $retry_count -lt $max_retries ]; do
         if AIOS_HOME="$work_dir" aios-cli hive login 2>&1; then
@@ -289,12 +290,26 @@ function deploy_single_node() {
                 sleep 2
                 AIOS_HOME="$work_dir" aios-cli start
                 sleep 5
+
+                # 检查守护进程是否正在运行
+                if ! AIOS_HOME="$work_dir" aios-cli status | grep -q "running"; then
+                    echo "守护进程未正常运行，尝试重新启动..."
+                    AIOS_HOME="$work_dir" aios-cli start
+                    sleep 5
+                fi
             else
                 echo "错误：登录失败，已重试 $max_retries 次"
                 echo "建议："
                 echo "1. 检查 Hive 服务状态"
                 echo "2. 等待几分钟后重试"
                 echo "3. 检查网络连接"
+                echo "是否继续重试？(y/n)"
+                read -p "请选择: " continue_retry
+                if [[ "$continue_retry" =~ ^[Yy]$ ]]; then
+                    echo "重置重试次数..."
+                    retry_count=0
+                    continue
+                fi
                 return 1
             fi
         fi
@@ -306,6 +321,8 @@ function deploy_single_node() {
         return 1
     fi
 
+    echo "登录验证成功！"
+
     # 选择等级
     echo "请为节点 $node_num 选择等级（1-5）："
     select tier in 1 2 3 4 5; do
@@ -313,11 +330,15 @@ function deploy_single_node() {
             echo "运行命令：AIOS_HOME=$work_dir aios-cli hive select-tier $tier"
             if ! AIOS_HOME="$work_dir" aios-cli hive select-tier "$tier" 2>&1; then
                 echo "错误：等级选择失败"
-                echo "尝试重新登录..."
-                AIOS_HOME="$work_dir" aios-cli hive login
-                sleep 2
-                if ! AIOS_HOME="$work_dir" aios-cli hive select-tier "$tier" 2>&1; then
-                    echo "错误：等级选择再次失败"
+                return 1
+            fi
+            # 验证选择的等级
+            local selected_tier=$(AIOS_HOME="$work_dir" aios-cli hive whoami 2>&1 | grep "tier" | awk '{print $2}')
+            if [ "$selected_tier" != "$tier" ]; then
+                echo "警告：选择的等级 ($tier) 与实际等级 ($selected_tier) 不匹配"
+                echo "是否继续？(y/n)"
+                read -p "请选择: " continue_deploy
+                if [[ ! "$continue_deploy" =~ ^[Yy]$ ]]; then
                     return 1
                 fi
             fi
@@ -329,49 +350,62 @@ function deploy_single_node() {
 
     # 连接到 Hive
     echo "连接到 Hive..."
-    echo "运行命令：AIOS_HOME=$work_dir aios-cli hive connect"
+    local connect_retries=0
+    local max_connect_retries=5
 
-    # 检查模型
-    echo "检查模型..."
-    local model="hf:TheBloke/phi-2-GGUF:phi-2.Q4_K_M.gguf"
-    if ! AIOS_HOME="$work_dir" aios-cli models list 2>&1 | grep -q "$model"; then
-        echo "添加必需的模型..."
-        if ! AIOS_HOME="$work_dir" aios-cli models add "$model" 2>&1; then
-            echo "错误：模型添加失败"
-            return 1
+    while [ $connect_retries -lt $max_connect_retries ]; do
+        # 检查端口占用
+        if netstat -tuln | grep -q ":$port "; then
+            echo "警告：端口 $port 已被占用"
+            port=$((port + 1))
+            echo "尝试使用新端口: $port"
         fi
-    fi
 
-    # 尝试连接到 Hive
-    if ! AIOS_HOME="$work_dir" aios-cli hive connect 2>&1; then
-        echo "错误：Hive 连接失败"
-        echo "检查可能的原因："
-        
-        echo "1. 检查守护进程状态..."
-        AIOS_HOME="$work_dir" aios-cli status
-        
-        echo "2. 检查账户状态..."
-        AIOS_HOME="$work_dir" aios-cli hive whoami
-        
-        echo "3. 检查模型状态..."
-        AIOS_HOME="$work_dir" aios-cli models list
-        
-        echo "4. 尝试重启守护进程..."
-        AIOS_HOME="$work_dir" aios-cli kill
-        sleep 2
-        AIOS_HOME="$work_dir" aios-cli start
+        # 确保模型已下载
+        echo "检查模型..."
+        local model="hf:TheBloke/phi-2-GGUF:phi-2.Q4_K_M.gguf"
+        if ! AIOS_HOME="$work_dir" aios-cli models list 2>&1 | grep -q "$model"; then
+            echo "添加必需的模型..."
+            if ! AIOS_HOME="$work_dir" aios-cli models add "$model" 2>&1; then
+                echo "错误：模型添加失败"
+                return 1
+            fi
+        fi
+
+        # 尝试连接
+        if AIOS_HOME="$work_dir" aios-cli hive connect 2>&1; then
+            echo "成功连接到 Hive！"
+            break
+        else
+            connect_retries=$((connect_retries + 1))
+            if [ $connect_retries -lt $max_connect_retries ]; then
+                echo "连接失败 (尝试 $connect_retries/$max_connect_retries)"
+                echo "诊断信息："
+                echo "1. 检查守护进程状态..."
+                AIOS_HOME="$work_dir" aios-cli status
+                echo "2. 检查端口状态..."
+                netstat -tuln | grep ":$port"
+                echo "3. 检查模型状态..."
+                AIOS_HOME="$work_dir" aios-cli models list
+                
+                echo "重启守护进程..."
+                AIOS_HOME="$work_dir" aios-cli kill
+                sleep 2
+                AIOS_HOME="$work_dir" aios-cli start
+                sleep 5
+            else
+                echo "错误：连接失败，已达到最大重试次数"
+                echo "是否继续重试？(y/n)"
+                read -p "请选择: " continue_retry
+                if [[ "$continue_retry" =~ ^[Yy]$ ]]; then
+                    connect_retries=0
+                    continue
+                fi
+                return 1
+            fi
+        fi
         sleep 5
-        
-        echo "5. 重新登录..."
-        AIOS_HOME="$work_dir" aios-cli hive login
-        sleep 2
-        
-        echo "6. 重新尝试连接..."
-        if ! AIOS_HOME="$work_dir" aios-cli hive connect --verbose 2>&1; then
-            echo "错误：Hive 连接再次失败"
-            return 1
-        fi
-    fi
+    done
 
     # 在屏幕会话中启动节点
     echo "启动节点 $node_num..."

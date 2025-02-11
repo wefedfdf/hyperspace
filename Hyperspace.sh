@@ -12,7 +12,7 @@ function main_menu() {
         echo "================================================================"
         echo "退出脚本1，请按键盘 ctrl + C 退出即可"
         echo "请选择要执行的操作:"
-        echo "1. 部署hypers节点222"
+        echo "1. 部署hypers节点223"
         echo "2. 查看日志"
         echo "3. 查看积分"
         echo "3a. 批量查询积分"
@@ -333,7 +333,7 @@ function batch_view_points() {
         echo "未找到任何节点目录"
         read -n 1 -s -r -p "按任意键返回主菜单..."
         return
-    }
+    fi
 
     echo "发现 ${#node_dirs[@]} 个节点，开始查询积分..."
     echo "================="
